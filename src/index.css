@@ -69,6 +69,7 @@ body, html {
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  touch-action: none;
 }
 
 #app {
@@ -835,4 +836,53 @@ kbd {
 /* ユーティリティ */
 .hidden {
   display: none !important;
+}
+
+/* モバイル向けレスポンシブデザイン */
+@media (max-width: 768px) {
+  #sidebar {
+    position: absolute;
+    left: -380px;
+    top: 0;
+    height: calc(100% - 24px);
+    z-index: 100;
+    transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 10px 0 30px rgba(0,0,0,0.5);
+  }
+  
+  #sidebar.show {
+    left: 12px;
+  }
+  
+  #app-header {
+    height: 50px;
+    padding: 0 10px;
+  }
+  
+  .page-title-input {
+    width: 150px;
+    font-size: 1.1rem;
+  }
+  
+  .btn-icon {
+    padding: 6px;
+  }
+  
+  #timeline-panel {
+    height: 70px;
+    padding: 0 12px;
+  }
+  
+  .timeline-controls {
+    gap: 10px;
+  }
+  
+  .btn-icon-large {
+    width: 40px;
+    height: 40px;
+  }
+  
+  .speed-control {
+    width: 80px;
+  }
 }

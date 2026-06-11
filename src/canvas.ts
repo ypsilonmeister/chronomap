@@ -36,6 +36,7 @@ export class MindMapCanvas {
   private isDirty = true;
   private imageCache = new Map<string, HTMLImageElement>();
   private currentPlaybackTime: string | null = null;
+  private longTapTimer: number | null = null;
 
   // 定数
   private readonly NODE_MAX_WIDTH = 180;
@@ -727,6 +728,15 @@ export class MindMapCanvas {
           x: worldPos.x - hitNode.position.x,
           y: worldPos.y - hitNode.position.y,
         };
+
+        // ロングタップの検知（長押しコンテキストメニュー）
+        if (this.longTapTimer) window.clearTimeout(this.longTapTimer);
+        this.longTapTimer = window.setTimeout(() => {
+          this.longTapTimer = null;
+          if (this.onContextMenu && !this.isPanning && !this.isPinching) {
+            this.onContextMenu(hitNode.id, e.touches[0].clientX, e.touches[0].clientY);
+          }
+        }, 500);
       } else {
         this.isPanning = true;
         this.panStart = { x: touchX - this.offsetX, y: touchY - this.offsetY };
@@ -764,6 +774,10 @@ export class MindMapCanvas {
     }
 
     if (e.touches.length === 1 && !this.isPinching) {
+      if (this.longTapTimer) {
+        window.clearTimeout(this.longTapTimer);
+        this.longTapTimer = null;
+      }
       const rect = this.canvas.getBoundingClientRect();
       const touchX = e.touches[0].clientX - rect.left;
       const touchY = e.touches[0].clientY - rect.top;
@@ -787,6 +801,11 @@ export class MindMapCanvas {
   }
 
   private handleTouchEnd(e: TouchEvent) {
+    if (this.longTapTimer) {
+      window.clearTimeout(this.longTapTimer);
+      this.longTapTimer = null;
+    }
+
     // ピンチ終了判定 (指が1本以下になったらピンチ終了)
     if (this.isPinching && e.touches.length < 2) {
       this.isPinching = false;

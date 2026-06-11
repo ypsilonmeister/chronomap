@@ -318,10 +318,33 @@ function initUIEvents() {
   // サイドバー表示切替
   if (sidebar && sidebarToggleBtn) {
     sidebarToggleBtn.addEventListener('click', () => {
-      sidebar.classList.toggle('hidden');
+      if (window.innerWidth <= 768) {
+        sidebar.classList.toggle('show');
+      } else {
+        sidebar.classList.toggle('hidden');
+      }
       setTimeout(() => {
         if (canvasManager) canvasManager.resize();
       }, 300);
+    });
+
+    // モバイル環境でサイドバー外をタップしたら閉じる
+    document.addEventListener('touchstart', (e) => {
+      if (window.innerWidth <= 768 && sidebar.classList.contains('show')) {
+        const target = e.target as HTMLElement;
+        if (!sidebar.contains(target) && !sidebarToggleBtn.contains(target)) {
+          sidebar.classList.remove('show');
+        }
+      }
+    }, { passive: true });
+    
+    document.addEventListener('mousedown', (e) => {
+      if (window.innerWidth <= 768 && sidebar.classList.contains('show')) {
+        const target = e.target as HTMLElement;
+        if (!sidebar.contains(target) && !sidebarToggleBtn.contains(target)) {
+          sidebar.classList.remove('show');
+        }
+      }
     });
   }
 
