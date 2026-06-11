@@ -791,10 +791,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // 同期マネージャーの初期化を実行
-  await syncManager.initialize();
+  // 同期マネージャーの初期化を実行 (アプリ起動をブロックしないよう非同期で実行)
+  console.log('Initializing sync manager...');
+  syncManager.initialize().then((success) => {
+    console.log('Sync manager initialization finished. Success:', success);
+  }).catch((err) => {
+    console.error('Sync manager initialization failed with error:', err);
+  });
 
   // 8. サイドバーマネージャー初期化
+  console.log('Initializing sidebar manager...');
   sidebarManager = new SidebarManager(
     selectPage,
     handlePageDeleted,

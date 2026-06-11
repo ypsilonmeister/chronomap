@@ -18,6 +18,13 @@ export class GoogleDriveSyncManager {
 
   // Google APIs SDK を動的ロードして初期化
   public async initialize(): Promise<boolean> {
+    console.log('sync.ts: initialize started. CLIENT_ID:', this.CLIENT_ID);
+    if (!this.CLIENT_ID) {
+      console.warn('sync.ts: Google Client ID is not configured.');
+      this.updateStatus('error', 'Google クライアントIDが未設定です');
+      return false;
+    }
+
     if (!navigator.onLine) {
       this.updateStatus('offline', 'ネットワークがオフラインです');
       return false;
@@ -25,15 +32,19 @@ export class GoogleDriveSyncManager {
 
     try {
       this.updateStatus('idle', 'Google 認証ライブラリをロード中...');
+      console.log('sync.ts: Loading Google GIS SDK script...');
       await this.loadScript('https://accounts.google.com/gsi/client');
+      console.log('sync.ts: Google GIS SDK script loaded successfully.');
       
       // GIS Token Client の初期化
       const google = (window as any).google;
       if (google?.accounts?.oauth2) {
+        console.log('sync.ts: Initializing Token Client...');
         this.tokenClient = google.accounts.oauth2.initTokenClient({
           client_id: this.CLIENT_ID,
           scope: this.SCOPES,
           callback: (response: any) => {
+            console.log('sync.ts: Auth callback received response:', response);
             if (response.error) {
               console.error('GIS authentication error:', response);
               this.updateStatus('error', 'Google 認証に失敗しました');
@@ -45,9 +56,11 @@ export class GoogleDriveSyncManager {
             this.sync();
           },
         });
+        console.log('sync.ts: Token Client initialized.');
         this.updateStatus('idle', '同期の準備が完了しました');
         return true;
       }
+      console.warn('sync.ts: google.accounts.oauth2 is not available.');
       return false;
     } catch (err) {
       console.error('Failed to load Google GIS SDK:', err);
