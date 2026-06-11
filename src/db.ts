@@ -1,6 +1,19 @@
 import { openDB, IDBPDatabase } from 'idb';
 import { Page, MindMapNode, Edge, HistoryEntry } from './types';
 
+// セキュアコンテキスト外（モバイルでのローカルネットワーク経由のHTTPなど）でも動作するように
+// crypto.randomUUID() のフォールバックを持つUUIDジェネレータ
+function generateUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 const DB_NAME = 'chronomap-db';
 const DB_VERSION = 1;
 
@@ -57,7 +70,7 @@ export async function createPage(title: string): Promise<Page> {
   const db = await getDB();
   const now = new Date().toISOString();
   const newPage: Page = {
-    pageId: crypto.randomUUID(),
+    pageId: generateUUID(),
     title,
     createdAt: now,
     updatedAt: now,
@@ -151,7 +164,7 @@ export async function clonePage(pageId: string): Promise<Page> {
   }
 
   // 1. コピー先ページの生成
-  const newPageId = crypto.randomUUID();
+  const newPageId = generateUUID();
   const clonedPage: Page = {
     pageId: newPageId,
     title: `${originalPage.title} (コピー)`,
@@ -178,7 +191,7 @@ export async function clonePage(pageId: string): Promise<Page> {
   const imageStore = tx.objectStore('images');
   
   for (const node of originalNodes) {
-    const newNodeId = crypto.randomUUID();
+    const newNodeId = generateUUID();
     idMap.set(node.id, newNodeId);
 
     const newMedia = { ...node.media };
@@ -216,7 +229,7 @@ export async function clonePage(pageId: string): Promise<Page> {
 
     if (newSource && newTarget) {
       const clonedEdge: Edge = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         pageId: newPageId,
         source: newSource,
         target: newTarget,
@@ -240,7 +253,7 @@ export async function createNode(node: Omit<MindMapNode, 'id' | 'createdAt' | 'u
   const now = new Date().toISOString();
   const newNode: MindMapNode = {
     ...node,
-    id: crypto.randomUUID(),
+    id: generateUUID(),
     createdAt: now,
     updatedAt: now,
   };
@@ -340,7 +353,7 @@ export async function createEdge(edge: Omit<Edge, 'id' | 'createdAt'>): Promise<
   const now = new Date().toISOString();
   const newEdge: Edge = {
     ...edge,
-    id: crypto.randomUUID(),
+    id: generateUUID(),
     createdAt: now,
   };
   await db.put('edges', newEdge);
