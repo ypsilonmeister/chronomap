@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ChronoMap - 思考の時系列マインドマップ</title>
+  <meta name="description" content="マインドマップによる視覚的UIと音声入力、写真添付、そして思考プロセスのタイムライン・プレイバック機能を備えたローカルファースト思考ツール。">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  
+  <!-- Google Fonts (Inter & Noto Sans JP) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="/src/index.css">
+</head>
+<body class="dark-theme">
+  <div id="app">
+    <!-- ページ一覧サイドバー -->
+    <aside id="sidebar" class="glass-panel">
+      <div class="sidebar-header">
+        <h1>ChronoMap</h1>
+        <button id="new-page-btn" class="btn btn-primary" title="新規ページ作成">
+          <i data-lucide="plus"></i> <span>新規ノート</span>
+        </button>
+      </div>
+      
+      <!-- 検索・ソート -->
+      <div class="search-sort-container">
+        <div class="search-box glass-input">
+          <i data-lucide="search" class="search-icon"></i>
+          <input type="text" id="search-input" placeholder="ページ・ノードを検索..." autocomplete="off">
+        </div>
+        <div class="sort-box">
+          <select id="sort-select" class="glass-select">
+            <option value="updatedAt_desc">最終更新が新しい順</option>
+            <option value="createdAt_desc">作成日時が新しい順</option>
+            <option value="title_asc">タイトル順 (A-Z)</option>
+          </select>
+        </div>
+      </div>
+      
+      <!-- ページ一覧リスト -->
+      <div class="page-list-container">
+        <ul id="page-list">
+          <!-- JSで動的に追加される -->
+        </ul>
+      </div>
+
+      <!-- 同期ステータス・設定 -->
+      <div class="sidebar-footer">
+        <button id="sync-btn" class="btn btn-secondary" title="Google Driveと同期">
+          <i data-lucide="cloud-lightning"></i> <span id="sync-status-text">同期未接続</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- メインコンテンツ領域（キャンバス） -->
+    <main id="main-content">
+      <!-- ヘッダー (現在のページタイトルと操作) -->
+      <header id="app-header" class="glass-panel">
+        <div class="header-left">
+          <button id="sidebar-toggle-btn" class="btn-icon" title="サイドバーの表示/非表示">
+            <i data-lucide="menu"></i>
+          </button>
+          <input type="text" id="current-page-title" value="無題のノート" class="page-title-input" placeholder="ノートのタイトルを入力...">
+        </div>
+        <div class="header-right">
+          <!-- Undo / Redo ボタン -->
+          <button id="undo-btn" class="btn-icon" title="元に戻す (Ctrl+Z)" disabled>
+            <i data-lucide="undo-2"></i>
+          </button>
+          <button id="redo-btn" class="btn-icon" title="やり直し (Ctrl+Y)" disabled>
+            <i data-lucide="redo-2"></i>
+          </button>
+          <!-- ヘルプボタン -->
+          <button id="help-btn" class="btn-icon" title="ヘルプ・ショートカットキー">
+            <i data-lucide="help-circle"></i>
+          </button>
+        </div>
+      </header>
+
+      <!-- 無限キャンバス -->
+      <canvas id="mindmap-canvas"></canvas>
+
+      <!-- キャンバス操作補助インジケータ (ズームレベル等) -->
+      <div id="canvas-status" class="glass-panel">
+        <span id="zoom-level">100%</span>
+        <button id="zoom-reset-btn" class="btn-link">リセット</button>
+      </div>
+
+      <!-- タイムライン・プレイバックコントロール -->
+      <footer id="timeline-panel" class="glass-panel">
+        <div class="timeline-controls">
+          <button id="play-btn" class="btn-icon-large play-state" title="自動再生">
+            <i data-lucide="play"></i>
+          </button>
+          
+          <div class="timeline-slider-container">
+            <input type="range" id="timeline-slider" min="0" max="100" value="100" step="any">
+            <div class="timeline-time-display">
+              <span id="current-time-text">--:--:--</span>
+              <span id="max-time-text">--:--:--</span>
+            </div>
+          </div>
+
+          <div class="speed-control">
+            <select id="speed-select" class="glass-select-small">
+              <option value="1">等倍 (1x)</option>
+              <option value="5">5倍速</option>
+              <option value="10">10倍速</option>
+              <option value="20">20倍速</option>
+            </select>
+          </div>
+        </div>
+      </footer>
+    </main>
+
+    <!-- ノードの右クリック/ロングタップ時のコンテキストメニュー -->
+    <div id="node-context-menu" class="context-menu glass-panel hidden">
+      <ul>
+        <li id="menu-edit-text"><i data-lucide="edit-3"></i> テキスト編集 <span class="shortcut">F2</span></li>
+        <li id="menu-audio-input"><i data-lucide="mic"></i> 音声入力</li>
+        <li id="menu-attach-image"><i data-lucide="image"></i> 写真を添付</li>
+        <li id="menu-delete-node" class="menu-danger"><i data-lucide="trash-2"></i> ノードを削除 <span class="shortcut">Del</span></li>
+      </ul>
+    </div>
+
+    <!-- 写真拡大表示用のモーダル -->
+    <div id="image-modal" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content glass-panel">
+        <button id="close-modal-btn" class="modal-close"><i data-lucide="x"></i></button>
+        <div class="modal-body">
+          <img id="modal-image" src="" alt="拡大画像">
+        </div>
+      </div>
+    </div>
+
+    <!-- 音声入力録音中のインジケーター -->
+    <div id="recording-toast" class="recording-toast glass-panel hidden">
+      <div class="mic-wave">
+        <span class="wave-bar"></span>
+        <span class="wave-bar"></span>
+        <span class="wave-bar"></span>
+      </div>
+      <span>音声を認識中... 話しかけてください</span>
+      <button id="stop-recording-btn" class="btn btn-danger-small">完了</button>
+    </div>
+
+    <!-- ショートカットヘルプのモーダル -->
+    <div id="help-modal" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content glass-panel help-content">
+        <h2>ショートカットキー & 操作ヘルプ</h2>
+        <div class="help-sections">
+          <div class="help-section">
+            <h3>マインドマップ操作</h3>
+            <ul>
+              <li><kbd>Enter</kbd> : 同一階層（兄弟）にノードを追加</li>
+              <li><kbd>Tab</kbd> : 下位階層（子）にノードを追加</li>
+              <li><kbd>Delete</kbd> / <kbd>Backspace</kbd> : 選択したノードを削除</li>
+              <li><kbd>F2</kbd> : テキストを編集</li>
+              <li><kbd>Ctrl</kbd> + <kbd>Z</kbd> : 元に戻す (Undo)</li>
+              <li><kbd>Ctrl</kbd> + <kbd>Y</kbd> : やり直し (Redo)</li>
+            </ul>
+          </div>
+          <div class="help-section">
+            <h3>キャンバス操作</h3>
+            <ul>
+              <li><kbd>ドラッグ (空白地)</kbd> : キャンバスの移動 (パン)</li>
+              <li><kbd>ホイール回転</kbd> : 拡大・縮小 (ズーム)</li>
+              <li><kbd>ダブルクリック (空白地)</kbd> : 新規ルートノードの追加</li>
+              <li><kbd>ドラッグ (ノード上)</kbd> : ノードの移動</li>
+            </ul>
+          </div>
+        </div>
+        <button id="close-help-btn" class="btn btn-secondary">閉じる</button>
+      </div>
+    </div>
+
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
