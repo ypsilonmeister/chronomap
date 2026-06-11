@@ -43,8 +43,8 @@ export class MindMapCanvas {
   private readonly NODE_PADDING_X = 16;
   private readonly NODE_PADDING_Y = 10;
   private readonly NODE_MIN_HEIGHT = 40;
-  private readonly PLUS_BTN_RADIUS = 10;
-  private readonly PLUS_BTN_OFFSET_X = 15; // ノード右端からのオフセット
+  private readonly PLUS_BTN_RADIUS = 15;
+  private readonly PLUS_BTN_OFFSET_X = 20; // ノード右端からのオフセット
 
   // コールバック
   public onNodeSelected: ((nodeId: string | null) => void) | null = null;
@@ -207,26 +207,61 @@ export class MindMapCanvas {
       const tx = targetNode.position.x;
       const ty = targetNode.position.y;
 
-      // 接続点（親の右端または左端から、子の左端または右端へ）
-      let startX = sx + (tx > sx ? sourceSize.width / 2 : -sourceSize.width / 2);
-      let startY = sy;
-      let endX = tx + (tx > sx ? -targetSize.width / 2 : targetSize.width / 2);
-      let endY = ty;
+      // 親ノードの接続候補点（4方向）
+      const sPoints = [
+        { x: sx - sourceSize.width / 2, y: sy, direction: 'left' },
+        { x: sx + sourceSize.width / 2, y: sy, direction: 'right' },
+        { x: sx, y: sy - sourceSize.height / 2, direction: 'top' },
+        { x: sx, y: sy + sourceSize.height / 2, direction: 'bottom' }
+      ];
+
+      // 子ノードの接続候補点（4方向）
+      const tPoints = [
+        { x: tx - targetSize.width / 2, y: ty, direction: 'left' },
+        { x: tx + targetSize.width / 2, y: ty, direction: 'right' },
+        { x: tx, y: ty - targetSize.height / 2, direction: 'top' },
+        { x: tx, y: ty + targetSize.height / 2, direction: 'bottom' }
+      ];
+
+      // 最短距離となる接続点の組み合わせを選択
+      let bestSPt = sPoints[0];
+      let bestTPt = tPoints[0];
+      let minDistance = Infinity;
+
+      for (const sPt of sPoints) {
+        for (const tPt of tPoints) {
+          const dist = Math.hypot(sPt.x - tPt.x, sPt.y - tPt.y);
+          if (dist < minDistance) {
+            minDistance = dist;
+            bestSPt = sPt;
+            bestTPt = tPt;
+          }
+        }
+      }
 
       // ベジェ曲線描画
       this.ctx.beginPath();
-      this.ctx.moveTo(startX, startY);
+      this.ctx.moveTo(bestSPt.x, bestSPt.y);
       
-      // コントロールポイントの計算 (緩やかなS字)
-      const cp1x = startX + (tx > sx ? 60 : -60);
-      const cp1y = startY;
-      const cp2x = endX + (tx > sx ? -60 : 60);
-      const cp2y = endY;
+      // コントロールポイントの計算（法線方向に60px延長）
+      let cp1x = bestSPt.x;
+      let cp1y = bestSPt.y;
+      if (bestSPt.direction === 'left') cp1x -= 60;
+      else if (bestSPt.direction === 'right') cp1x += 60;
+      else if (bestSPt.direction === 'top') cp1y -= 60;
+      else if (bestSPt.direction === 'bottom') cp1y += 60;
 
-      this.ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY);
+      let cp2x = bestTPt.x;
+      let cp2y = bestTPt.y;
+      if (bestTPt.direction === 'left') cp2x -= 60;
+      else if (bestTPt.direction === 'right') cp2x += 60;
+      else if (bestTPt.direction === 'top') cp2y -= 60;
+      else if (bestTPt.direction === 'bottom') cp2y += 60;
+
+      this.ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, bestTPt.x, bestTPt.y);
       
       // グラデーションエッジ
-      const grad = this.ctx.createLinearGradient(startX, startY, endX, endY);
+      const grad = this.ctx.createLinearGradient(bestSPt.x, bestSPt.y, bestTPt.x, bestTPt.y);
       const isParentRoot = !this.edges.some((e) => e.target === sourceNode.id);
       
       if (isParentRoot) {
@@ -386,11 +421,12 @@ export class MindMapCanvas {
     this.ctx.stroke();
 
     // ＋の十字線
+    const crossHalfSize = Math.round(this.PLUS_BTN_RADIUS * 0.5);
     this.ctx.beginPath();
-    this.ctx.moveTo(btnX - 5, y);
-    this.ctx.lineTo(btnX + 5, y);
-    this.ctx.moveTo(btnX, y - 5);
-    this.ctx.lineTo(btnX, y + 5);
+    this.ctx.moveTo(btnX - crossHalfSize, y);
+    this.ctx.lineTo(btnX + crossHalfSize, y);
+    this.ctx.moveTo(btnX, y - crossHalfSize);
+    this.ctx.lineTo(btnX, y + crossHalfSize);
     this.ctx.strokeStyle = '#ffffff';
     this.ctx.lineWidth = 1.5;
     this.ctx.stroke();

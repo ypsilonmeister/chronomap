@@ -715,7 +715,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (createdOut.node) {
       setTimeout(() => {
-        if (createdOut.node) startInlineEdit(createdOut.node.id);
+        if (createdOut.node) {
+          if (window.innerWidth > 768) {
+            startInlineEdit(createdOut.node.id);
+          } else {
+            canvasManager?.setSelectedNodeId(createdOut.node.id);
+          }
+        }
       }, 100);
     }
   };
@@ -757,7 +763,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (createdOut.node) {
       setTimeout(() => {
-        if (createdOut.node) startInlineEdit(createdOut.node.id);
+        if (createdOut.node) {
+          if (window.innerWidth > 768) {
+            startInlineEdit(createdOut.node.id);
+          } else {
+            canvasManager?.setSelectedNodeId(createdOut.node.id);
+          }
+        }
       }, 100);
     }
   };
@@ -934,7 +946,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (createdOut.node) {
           setTimeout(() => {
-            if (createdOut.node) startInlineEdit(createdOut.node.id);
+            if (createdOut.node) {
+              if (window.innerWidth > 768) {
+                startInlineEdit(createdOut.node.id);
+              } else {
+                canvasManager?.setSelectedNodeId(createdOut.node.id);
+              }
+            }
           }, 100);
         }
       },

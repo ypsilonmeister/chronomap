@@ -95,11 +95,11 @@ export class MediaManager {
         const existingNode = await db.getDB().then((d) => d.get('nodes', nodeId));
         const existingMedia = existingNode?.media;
 
-        // ノード情報を更新（既存の音声メタデータを保持）
+        // ノード情報を更新（永久IDである `img-nodeId` を保存する）
         await db.updateNode(nodeId, {
           media: {
             hasImage: true,
-            imageRef: localBlobUrl, // 一時的にBlob URLを設定。次回ロード時は IndexedDB から復元する
+            imageRef: imageRef, // 保存するのは永久参照キー（img-nodeId）
             hasAudio: existingMedia?.hasAudio ?? false,
             audioRef: existingMedia?.audioRef ?? ''
           }
