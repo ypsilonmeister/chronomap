@@ -211,6 +211,26 @@ export class GoogleDriveSyncManager {
   // ローカルデータを収集し、画像を Base64 化したオブジェクトを生成
   private async collectLocalData() {
     const database = await db.getDB();
+    
+    // 歴史エントリーのマイグレーション: entryIdがない場合に付与して保存
+    const rawHistories = await database.getAll('history');
+    const tx = database.transaction('history', 'readwrite');
+    const historyStore = tx.objectStore('history');
+    let migrated = false;
+    for (const h of rawHistories) {
+      if (!h.entryId) {
+        h.entryId = db.generateUUID();
+        await historyStore.put(h);
+        migrated = true;
+      }
+    }
+    if (migrated) {
+      await tx.done;
+    } else {
+      await tx.abort();
+    }
+
+    // マイグレーション後の最新データを取得
     const pages = await database.getAll('pages');
     const nodes = await database.getAll('nodes');
     const edges = await database.getAll('edges');
@@ -283,15 +303,32 @@ export class GoogleDriveSyncManager {
 
   // 競合解消マージ処理 (updatedAt が新しい方を採用)
   private async mergeData(local: any, cloud: any) {
-    if (!cloud) return local;
+    if (!cloud) {
+      // クラウドデータが無い場合でも、ローカルデータから孤立した画像を削除して返却する
+      const activeImageRefs = new Set(
+        local.nodes
+          .filter((n: any) => !n.deleted && n.media.hasImage && n.media.imageRef)
+          .map((n: any) => n.media.imageRef)
+      );
+      local.images = local.images.filter((img: any) => activeImageRefs.has(img.id));
+      return local;
+    }
 
     const merged = {
       pages: this.mergeEntities(local.pages, cloud.pages, 'pageId'),
       nodes: this.mergeEntities(local.nodes, cloud.nodes, 'id'),
-      edges: this.mergeEntities(local.edges, cloud.edges, 'id', false), // エッジは作成日時のみなので単純マージ
-      history: this.mergeEntities(local.history, cloud.history, 'id', false), // 履歴も単純マージ
+      edges: this.mergeEntities(local.edges, cloud.edges, 'id', true), // エッジも updatedAt 比較でマージ
+      history: this.mergeEntities(local.history, cloud.history, 'entryId', false), // 履歴は entryId でマージ
       images: this.mergeImages(local.images, cloud.images),
     };
+
+    // 画像データのガーベジコレクション (アクティブなノードから参照されていない画像を排除)
+    const activeImageRefs = new Set(
+      merged.nodes
+        .filter((n: any) => !n.deleted && n.media.hasImage && n.media.imageRef)
+        .map((n: any) => n.media.imageRef)
+    );
+    merged.images = merged.images.filter((img: any) => activeImageRefs.has(img.id));
 
     return merged;
   }
@@ -315,8 +352,8 @@ export class GoogleDriveSyncManager {
         map.set(id, cloudItem);
       } else if (useUpdatedAt) {
         // 両方にある場合は updatedAt を比較
-        const localTime = new Date(localItem.updatedAt || 0).getTime();
-        const cloudTime = new Date(cloudItem.updatedAt || 0).getTime();
+        const localTime = new Date(localItem.updatedAt || localItem.createdAt || 0).getTime();
+        const cloudTime = new Date(cloudItem.updatedAt || cloudItem.createdAt || 0).getTime();
         
         if (cloudTime > localTime) {
           map.set(id, cloudItem);

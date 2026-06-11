@@ -3,7 +3,7 @@ import { Page, MindMapNode, Edge, HistoryEntry } from './types';
 
 // セキュアコンテキスト外（モバイルでのローカルネットワーク経由のHTTPなど）でも動作するように
 // crypto.randomUUID() のフォールバックを持つUUIDジェネレータ
-function generateUUID(): string {
+export function generateUUID(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
@@ -81,14 +81,17 @@ export async function createPage(title: string): Promise<Page> {
 
 export async function getPage(pageId: string): Promise<Page | undefined> {
   const db = await getDB();
-  return db.get('pages', pageId);
+  const page = await db.get('pages', pageId);
+  return page && !page.deleted ? page : undefined;
 }
 
 export async function getAllPages(): Promise<Page[]> {
   const db = await getDB();
   // 最終更新日時が新しい順にソートするデフォルト挙動
   const pages = await db.getAll('pages');
-  return pages.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  return pages
+    .filter((p) => !p.deleted)
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 }
 
 export async function updatePage(pageId: string, updates: Partial<Omit<Page, 'pageId' | 'createdAt'>>): Promise<Page> {
@@ -114,41 +117,36 @@ export async function updatePage(pageId: string, updates: Partial<Omit<Page, 'pa
 
 export async function deletePage(pageId: string): Promise<void> {
   const db = await getDB();
-  // ページに紐づくすべてのデータ（nodes, edges, history, images）をカスケード削除する
-  const tx = db.transaction(['pages', 'nodes', 'edges', 'history', 'images'], 'readwrite');
+  const tx = db.transaction(['pages', 'nodes', 'edges'], 'readwrite');
+  const now = new Date().toISOString();
   
-  // 1. ページ本体の削除
-  await tx.objectStore('pages').delete(pageId);
+  // 1. ページ本体の論理削除
+  const pageStore = tx.objectStore('pages');
+  const page = await pageStore.get(pageId);
+  if (page) {
+    page.deleted = true;
+    page.updatedAt = now;
+    await pageStore.put(page);
+  }
 
-  // 2. ノードの取得と画像キーの収集、ノードの削除
+  // 2. ノードの論理削除
   const nodeStore = tx.objectStore('nodes');
   const nodeIndex = nodeStore.index('pageId');
   const nodes = await nodeIndex.getAll(pageId);
-  
-  const imageStore = tx.objectStore('images');
   for (const node of nodes) {
-    await nodeStore.delete(node.id);
-    if (node.media.hasImage && node.media.imageRef.startsWith('img-')) {
-      await imageStore.delete(node.media.imageRef);
-    }
+    node.deleted = true;
+    node.updatedAt = now;
+    await nodeStore.put(node);
   }
 
-  // 3. エッジの削除
+  // 3. エッジの論理削除
   const edgeStore = tx.objectStore('edges');
   const edgeIndex = edgeStore.index('pageId');
   const edges = await edgeIndex.getAll(pageId);
   for (const edge of edges) {
-    await edgeStore.delete(edge.id);
-  }
-
-  // 4. 履歴の削除
-  const historyStore = tx.objectStore('history');
-  const historyIndex = historyStore.index('pageId');
-  const histories = await historyIndex.getAll(pageId);
-  for (const hist of histories) {
-    if (hist.id !== undefined) {
-      await historyStore.delete(hist.id);
-    }
+    edge.deleted = true;
+    edge.updatedAt = now;
+    await edgeStore.put(edge);
   }
 
   await tx.done;
@@ -269,7 +267,8 @@ export async function getNodesByPage(pageId: string): Promise<MindMapNode[]> {
   const db = await getDB();
   const tx = db.transaction('nodes', 'readonly');
   const index = tx.objectStore('nodes').index('pageId');
-  return index.getAll(pageId);
+  const nodes = await index.getAll(pageId);
+  return nodes.filter((n) => !n.deleted);
 }
 
 export async function updateNode(id: string, updates: Partial<Omit<MindMapNode, 'id' | 'pageId' | 'createdAt'>>): Promise<MindMapNode> {
@@ -305,7 +304,7 @@ export async function updateNode(id: string, updates: Partial<Omit<MindMapNode, 
 
 export async function deleteNode(id: string): Promise<void> {
   const db = await getDB();
-  const tx = db.transaction(['nodes', 'edges', 'images', 'pages'], 'readwrite');
+  const tx = db.transaction(['nodes', 'edges', 'pages'], 'readwrite');
   const nodeStore = tx.objectStore('nodes');
   const node = await nodeStore.get(id);
 
@@ -316,24 +315,23 @@ export async function deleteNode(id: string): Promise<void> {
 
   const now = new Date().toISOString();
 
-  // 1. ノード削除
-  await nodeStore.delete(id);
+  // 1. ノードを論理削除
+  node.deleted = true;
+  node.updatedAt = now;
+  await nodeStore.put(node);
 
-  // 2. 画像添付があれば削除
-  if (node.media.hasImage && node.media.imageRef.startsWith('img-')) {
-    await tx.objectStore('images').delete(node.media.imageRef);
-  }
-
-  // 3. このノードに接続するエッジの削除 (source または target)
+  // 2. 接続するエッジを論理削除
   const edgeStore = tx.objectStore('edges');
-  const edges = await edgeStore.getAll(); // 簡易的な取得、本来はインデックスを使うと高速
+  const edges = await edgeStore.getAll();
   for (const edge of edges) {
     if (edge.source === id || edge.target === id) {
-      await edgeStore.delete(edge.id);
+      edge.deleted = true;
+      edge.updatedAt = now;
+      await edgeStore.put(edge);
     }
   }
 
-  // 4. ページ更新日時
+  // 3. ページ更新日時
   const pageStore = tx.objectStore('pages');
   const page = await pageStore.get(node.pageId);
   if (page) {
@@ -355,6 +353,7 @@ export async function createEdge(edge: Omit<Edge, 'id' | 'createdAt'>): Promise<
     ...edge,
     id: generateUUID(),
     createdAt: now,
+    updatedAt: now,
   };
   await db.put('edges', newEdge);
   
@@ -368,7 +367,8 @@ export async function getEdgesByPage(pageId: string): Promise<Edge[]> {
   const db = await getDB();
   const tx = db.transaction('edges', 'readonly');
   const index = tx.objectStore('edges').index('pageId');
-  return index.getAll(pageId);
+  const edges = await index.getAll(pageId);
+  return edges.filter((e) => !e.deleted);
 }
 
 export async function deleteEdge(id: string): Promise<void> {
@@ -379,7 +379,9 @@ export async function deleteEdge(id: string): Promise<void> {
 
   if (edge) {
     const now = new Date().toISOString();
-    await edgeStore.delete(id);
+    edge.deleted = true;
+    edge.updatedAt = now;
+    await edgeStore.put(edge);
     
     // ページの最終更新日時も更新
     const pageStore = tx.objectStore('pages');
@@ -416,9 +418,13 @@ export async function deleteImage(id: string): Promise<void> {
 // History (Timeline & Playback)
 // ==========================================
 
-export async function addHistory(entry: Omit<HistoryEntry, 'id'>): Promise<void> {
+export async function addHistory(entry: Omit<HistoryEntry, 'id' | 'entryId'>): Promise<void> {
   const db = await getDB();
-  await db.put('history', entry);
+  const newEntry: HistoryEntry = {
+    ...entry,
+    entryId: generateUUID()
+  };
+  await db.put('history', newEntry);
 }
 
 export async function getHistoryByPage(pageId: string): Promise<HistoryEntry[]> {

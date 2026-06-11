@@ -79,11 +79,14 @@ export class AddNodeCommand implements Command {
       const now = new Date().toISOString();
       this.node.createdAt = now;
       this.node.updatedAt = now;
+      this.node.deleted = false;
       const database = await db.getDB();
       await database.put('nodes', this.node);
       
       if (this.edge) {
         this.edge.createdAt = now;
+        this.edge.updatedAt = now;
+        this.edge.deleted = false;
         await database.put('edges', this.edge);
       }
     } else {
@@ -299,14 +302,17 @@ export class DeleteNodeCommand implements Command {
       (e) => toDeleteNodeIds.has(e.source) || toDeleteNodeIds.has(e.target)
     );
 
-    // 画像データの収集と削除
+    // 画像データの収集と削除（物理削除ではなく、論理削除に変更）
     const tx = database.transaction(['nodes', 'edges', 'images', 'pages'], 'readwrite');
     const nodeStore = tx.objectStore('nodes');
     const edgeStore = tx.objectStore('edges');
     const imageStore = tx.objectStore('images');
 
+    const now = new Date().toISOString();
     for (const n of this.deletedNodes) {
-      await nodeStore.delete(n.id);
+      n.deleted = true;
+      n.updatedAt = now;
+      await nodeStore.put(n);
       
       if (n.media.hasImage && n.media.imageRef.startsWith('img-')) {
         const imgObj = await imageStore.get(n.media.imageRef);
@@ -321,7 +327,9 @@ export class DeleteNodeCommand implements Command {
     }
 
     for (const e of this.deletedEdges) {
-      await edgeStore.delete(e.id);
+      e.deleted = true;
+      e.updatedAt = now;
+      await edgeStore.put(e);
     }
 
     // ページ更新日時
@@ -358,15 +366,20 @@ export class DeleteNodeCommand implements Command {
       await imageStore.put(img);
     }
 
-    // ノードの復元
+    // ノードの復元（deletedをfalseにし、更新時刻を更新）
+    const now = new Date().toISOString();
     const nodeStore = tx.objectStore('nodes');
     for (const n of this.deletedNodes) {
+      n.deleted = false;
+      n.updatedAt = now;
       await nodeStore.put(n);
     }
 
     // エッジの復元
     const edgeStore = tx.objectStore('edges');
     for (const e of this.deletedEdges) {
+      e.deleted = false;
+      e.updatedAt = now;
       await edgeStore.put(e);
     }
 
