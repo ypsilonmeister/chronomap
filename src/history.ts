@@ -419,15 +419,15 @@ export class AlignNodesCommand implements Command {
   ) {}
 
   async execute() {
-    const database = await db.getDB();
-    const tx = database.transaction('nodes', 'readwrite');
-    const store = tx.objectStore('nodes');
-
-    // 現在のノードをすべて取得して、古い座標を保存
+    // トランザクション外で先に非同期データ取得を完了させる
     const allNodes = await db.getNodesByPage(this.pageId);
     for (const node of allNodes) {
       this.originalPositions.set(node.id, { ...node.position });
     }
+
+    const database = await db.getDB();
+    const tx = database.transaction('nodes', 'readwrite');
+    const store = tx.objectStore('nodes');
 
     // 新しい座標を書き込み
     for (const [nodeId, pos] of this.newPositions.entries()) {
@@ -453,11 +453,13 @@ export class AlignNodesCommand implements Command {
   }
 
   async undo() {
+    // トランザクション外で先に非同期データ取得を完了させる
+    const allNodes = await db.getNodesByPage(this.pageId);
+
     const database = await db.getDB();
     const tx = database.transaction('nodes', 'readwrite');
     const store = tx.objectStore('nodes');
 
-    const allNodes = await db.getNodesByPage(this.pageId);
     for (const [nodeId, pos] of this.originalPositions.entries()) {
       const node = allNodes.find((n) => n.id === nodeId);
       if (node) {
