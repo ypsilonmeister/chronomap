@@ -73,6 +73,10 @@
           <button id="redo-btn" class="btn-icon" title="やり直し (Ctrl+Y)" disabled>
             <i data-lucide="redo-2"></i>
           </button>
+          <!-- 自動整列ボタン -->
+          <button id="align-btn" class="btn-icon" title="自動整列 (Ctrl+Shift+L)" disabled>
+            <i data-lucide="sparkles"></i>
+          </button>
           <!-- ヘルプボタン -->
           <button id="help-btn" class="btn-icon" title="ヘルプ・ショートカットキー">
             <i data-lucide="help-circle"></i>
@@ -105,11 +109,11 @@
           </div>
 
           <div class="speed-control">
-            <select id="speed-select" class="glass-select-small">
-              <option value="1">等倍 (1x)</option>
-              <option value="5">5倍速</option>
-              <option value="10">10倍速</option>
-              <option value="20">20倍速</option>
+            <select id="speed-select" class="glass-select-small" title="再生にかける時間">
+              <option value="10">10秒で再生</option>
+              <option value="20">20秒で再生</option>
+              <option value="30" selected>30秒で再生</option>
+              <option value="60">60秒で再生</option>
             </select>
           </div>
         </div>

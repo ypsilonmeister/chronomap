@@ -53,6 +53,7 @@ export class MindMapCanvas {
   public onAddRootNode: ((pos: Position) => void) | null = null;
   public onContextMenu: ((nodeId: string, x: number, y: number) => void) | null = null;
   public onZoomChanged: ((scale: number) => void) | null = null;
+  public onRender: (() => void) | null = null;
 
   constructor(canvasId: string) {
     this.canvas = document.getElementById(canvasId) as HTMLCanvasElement;
@@ -180,6 +181,10 @@ export class MindMapCanvas {
     this.drawNodes(width, height);
 
     this.ctx.restore();
+
+    if (this.onRender) {
+      this.onRender();
+    }
   }
 
   // エッジの描画
@@ -423,7 +428,7 @@ export class MindMapCanvas {
   }
 
   // ノードの動的なサイズ計算
-  private calculateNodeSize(node: MindMapNode): { width: number; height: number } {
+  public calculateNodeSize(node: MindMapNode): { width: number; height: number } {
     this.ctx.save();
     const isRoot = !this.edges.some((e) => e.target === node.id);
     this.ctx.font = isRoot ? '600 14px "Inter", "Noto Sans JP", sans-serif' : '400 13px "Inter", "Noto Sans JP", sans-serif';
@@ -532,9 +537,16 @@ export class MindMapCanvas {
 
     // 左クリック
     if (e.button === 0) {
+      const activeEl = document.activeElement;
+      const isEditing = activeEl && activeEl.classList.contains('canvas-textarea');
+
       // 1. ノード上クリック判定
       const hitNode = this.findNodeAt(worldPos);
       if (hitNode) {
+        if (isEditing && hitNode.id !== this.selectedNodeId) {
+          (activeEl as HTMLElement).blur();
+        }
+
         // ＋ボタン上のクリックか判定
         if (hitNode.id === this.hoveredNodeId && this.isHoveringPlusBtn && !this.currentPlaybackTime) {
           if (this.onAddChildNode) {
@@ -552,6 +564,9 @@ export class MindMapCanvas {
         };
         this.canvas.style.cursor = 'grabbing';
       } else {
+        if (isEditing) {
+          (activeEl as HTMLElement).blur();
+        }
         // 空白地クリックはパン開始
         this.isPanning = true;
         this.panStart = { x: mouseX - this.offsetX, y: mouseY - this.offsetY };
@@ -721,7 +736,14 @@ export class MindMapCanvas {
       const worldPos = this.screenToWorld(touchX, touchY);
       const hitNode = this.findNodeAt(worldPos);
 
+      const activeEl = document.activeElement;
+      const isEditing = activeEl && activeEl.classList.contains('canvas-textarea');
+
       if (hitNode) {
+        if (isEditing && hitNode.id !== this.selectedNodeId) {
+          (activeEl as HTMLElement).blur();
+        }
+
         this.setSelectedNodeId(hitNode.id);
         this.draggedNodeId = hitNode.id;
         this.dragOffset = {
@@ -738,6 +760,9 @@ export class MindMapCanvas {
           }
         }, 500);
       } else {
+        if (isEditing) {
+          (activeEl as HTMLElement).blur();
+        }
         this.isPanning = true;
         this.panStart = { x: touchX - this.offsetX, y: touchY - this.offsetY };
       }

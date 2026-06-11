@@ -5,6 +5,7 @@ export interface ShortcutCallbacks {
   onAddChild: (nodeId: string) => void;
   onDeleteNode: (nodeId: string) => void;
   onEditText: (nodeId: string) => void;
+  onAlign: () => void;
 }
 
 export class ShortcutManager {
@@ -38,7 +39,7 @@ export class ShortcutManager {
 
     const selectedId = this.getSelectedNodeId();
 
-    // Undo / Redo (Ctrl + Z / Ctrl + Y / Ctrl + Shift + Z)
+    // Undo / Redo / Align (Ctrl + Z / Ctrl + Y / Ctrl + Shift + Z / Ctrl + Shift + L)
     if ((e.ctrlKey || e.metaKey) && !e.altKey) {
       if (e.key.toLowerCase() === 'z') {
         e.preventDefault();
@@ -47,11 +48,16 @@ export class ShortcutManager {
         } else {
           this.callbacks.onUndo();
         }
+        return;
       } else if (e.key.toLowerCase() === 'y') {
         e.preventDefault();
         this.callbacks.onRedo();
+        return;
+      } else if (e.key.toLowerCase() === 'l' && e.shiftKey) {
+        e.preventDefault();
+        this.callbacks.onAlign();
+        return;
       }
-      return;
     }
 
     // ノードが選択されていない場合は、以下のキーショートカットは動作させない

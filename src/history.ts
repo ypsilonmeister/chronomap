@@ -394,3 +394,76 @@ export class DeleteNodeCommand implements Command {
     this.callback();
   }
 }
+
+// 5. 整列コマンド (Auto Layout)
+export class AlignNodesCommand implements Command {
+  private originalPositions = new Map<string, Position>();
+
+  constructor(
+    private pageId: string,
+    private newPositions: Map<string, Position>,
+    private callback: () => void
+  ) {}
+
+  async execute() {
+    const database = await db.getDB();
+    const tx = database.transaction('nodes', 'readwrite');
+    const store = tx.objectStore('nodes');
+
+    // 現在のノードをすべて取得して、古い座標を保存
+    const allNodes = await db.getNodesByPage(this.pageId);
+    for (const node of allNodes) {
+      this.originalPositions.set(node.id, { ...node.position });
+    }
+
+    // 新しい座標を書き込み
+    for (const [nodeId, pos] of this.newPositions.entries()) {
+      const node = allNodes.find((n) => n.id === nodeId);
+      if (node) {
+        node.position = { ...pos };
+        await store.put(node);
+      }
+    }
+    await tx.done;
+
+    // タイムライン再生用ログの保存
+    await db.addHistory({
+      pageId: this.pageId,
+      timestamp: new Date().toISOString(),
+      action: 'move_node',
+      payload: {
+        positions: Array.from(this.newPositions.entries())
+      }
+    });
+
+    this.callback();
+  }
+
+  async undo() {
+    const database = await db.getDB();
+    const tx = database.transaction('nodes', 'readwrite');
+    const store = tx.objectStore('nodes');
+
+    const allNodes = await db.getNodesByPage(this.pageId);
+    for (const [nodeId, pos] of this.originalPositions.entries()) {
+      const node = allNodes.find((n) => n.id === nodeId);
+      if (node) {
+        node.position = { ...pos };
+        await store.put(node);
+      }
+    }
+    await tx.done;
+
+    // タイムライン再生用ログの保存
+    await db.addHistory({
+      pageId: this.pageId,
+      timestamp: new Date().toISOString(),
+      action: 'move_node',
+      payload: {
+        positions: Array.from(this.originalPositions.entries())
+      }
+    });
+
+    this.callback();
+  }
+}

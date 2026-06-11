@@ -1,8 +1,8 @@
-import { createIcons, Plus, Search, CloudLightning, Menu, Undo2, Redo2, HelpCircle, Play, Pause, Edit3, Mic, Image, Trash2, X } from 'lucide';
-import { MindMapNode } from './types';
+import { createIcons, Plus, Search, CloudLightning, Menu, Undo2, Redo2, Sparkles, HelpCircle, Play, Pause, Edit3, Mic, Image, Trash2, X } from 'lucide';
+import { MindMapNode, Edge, Position } from './types';
 import * as db from './db';
 import { MindMapCanvas } from './canvas';
-import { CommandStack, AddNodeCommand, MoveNodeCommand, UpdateNodeTextCommand, DeleteNodeCommand } from './history';
+import { CommandStack, AddNodeCommand, MoveNodeCommand, UpdateNodeTextCommand, DeleteNodeCommand, AlignNodesCommand } from './history';
 import { ShortcutManager } from './shortcuts';
 import { SidebarManager } from './sidebar';
 import { AudioSpeechRecognizer } from './audio';
@@ -21,10 +21,13 @@ let contextMenuManager: ContextMenuManager | null = null;
 let speechRecognizer: AudioSpeechRecognizer | null = null;
 let playbackManager: PlaybackManager | null = null;
 let syncManager: GoogleDriveSyncManager | null = null;
+let activeEditNodeId: string | null = null;
+let activeTextarea: HTMLTextAreaElement | null = null;
 
 // DOM 要素キャッシュ
 let undoBtn: HTMLButtonElement;
 let redoBtn: HTMLButtonElement;
+let alignBtn: HTMLButtonElement;
 let currentPageTitleInput: HTMLInputElement;
 let zoomLevelSpan: HTMLSpanElement;
 let zoomResetBtn: HTMLButtonElement;
@@ -43,6 +46,7 @@ function initIcons() {
       Menu,
       Undo2,
       Redo2,
+      Sparkles,
       HelpCircle,
       Play,
       Pause,
@@ -191,6 +195,9 @@ function startInlineEdit(nodeId: string) {
   textarea.focus();
   textarea.select();
 
+  activeEditNodeId = nodeId;
+  activeTextarea = textarea;
+
   if (shortcutManager) {
     shortcutManager.setEditingState(true);
   }
@@ -211,6 +218,10 @@ function startInlineEdit(nodeId: string) {
 
   const cleanup = () => {
     textarea.remove();
+    if (activeTextarea === textarea) {
+      activeTextarea = null;
+      activeEditNodeId = null;
+    }
     if (shortcutManager) {
       shortcutManager.setEditingState(false);
     }
@@ -236,10 +247,33 @@ function removeInlineTextarea() {
   const existing = document.querySelector('.canvas-textarea');
   if (existing) {
     existing.remove();
+    activeEditNodeId = null;
+    activeTextarea = null;
     if (shortcutManager) {
       shortcutManager.setEditingState(false);
     }
   }
+}
+
+function updateTextareaPosition() {
+  if (!activeEditNodeId || !activeTextarea || !canvasManager) return;
+  const node = canvasManager['nodes'].find((n) => n.id === activeEditNodeId);
+  if (!node) return;
+
+  const size = canvasManager['calculateNodeSize'](node);
+  const rect = canvasManager['canvas'].getBoundingClientRect();
+  const halfW = rect.width / 2;
+  const halfH = rect.height / 2;
+  
+  const screenX = (node.position.x * canvasManager['scale']) + halfW + canvasManager['offsetX'];
+  const screenY = (node.position.y * canvasManager['scale']) + halfH + canvasManager['offsetY'];
+  const screenW = size.width * canvasManager['scale'];
+  const screenH = size.height * canvasManager['scale'];
+
+  activeTextarea.style.left = `${rect.left + screenX - screenW / 2}px`;
+  activeTextarea.style.top = `${rect.top + screenY - screenH / 2}px`;
+  activeTextarea.style.width = `${screenW}px`;
+  activeTextarea.style.height = `${screenH}px`;
 }
 
 // 音声入力のハンドリング
@@ -409,11 +443,141 @@ function initUIEvents() {
   });
 }
 
+// 自動整列の座標計算アルゴリズム
+function runAutoLayout(
+  nodes: MindMapNode[],
+  edges: Edge[],
+  rootNode: MindMapNode,
+  canvas: MindMapCanvas,
+  outPositions: Map<string, Position>
+) {
+  const getChildren = (nodeId: string) => {
+    return nodes.filter((n) => edges.some((e) => e.source === nodeId && e.target === n.id));
+  };
+
+  const children = getChildren(rootNode.id);
+  const rightChildren = children.filter((c) => c.position.x >= rootNode.position.x);
+  const leftChildren = children.filter((c) => c.position.x < rootNode.position.x);
+
+  const spacingX = 240;
+  const spacingY = 30;
+
+  const subtreeHeights = new Map<string, number>();
+
+  const getNodeHeight = (node: MindMapNode) => {
+    return canvas.calculateNodeSize(node).height;
+  };
+
+  const calculateSubtreeHeight = (nodeId: string): number => {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return 0;
+    
+    const nodeChildren = getChildren(nodeId);
+    const ownHeight = getNodeHeight(node);
+    
+    if (nodeChildren.length === 0) {
+      subtreeHeights.set(nodeId, ownHeight);
+      return ownHeight;
+    }
+    
+    let childrenHeightSum = 0;
+    for (const child of nodeChildren) {
+      childrenHeightSum += calculateSubtreeHeight(child.id);
+    }
+    childrenHeightSum += spacingY * (nodeChildren.length - 1);
+    
+    const height = Math.max(ownHeight, childrenHeightSum);
+    subtreeHeights.set(nodeId, height);
+    return height;
+  };
+
+  for (const child of children) {
+    calculateSubtreeHeight(child.id);
+  }
+
+  const positionSubtree = (nodeId: string, currentX: number, centerY: number, side: number) => {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    
+    outPositions.set(nodeId, { x: currentX, y: centerY });
+    
+    const nodeChildren = getChildren(nodeId);
+    if (nodeChildren.length === 0) return;
+    
+    let totalChildrenHeight = 0;
+    for (const child of nodeChildren) {
+      totalChildrenHeight += subtreeHeights.get(child.id) || 0;
+    }
+    totalChildrenHeight += spacingY * (nodeChildren.length - 1);
+    
+    let yCursor = centerY - totalChildrenHeight / 2;
+    for (const child of nodeChildren) {
+      const childHeight = subtreeHeights.get(child.id) || 0;
+      const childCenterY = yCursor + childHeight / 2;
+      positionSubtree(child.id, currentX + side * spacingX, childCenterY, side);
+      yCursor += childHeight + spacingY;
+    }
+  };
+
+  if (rightChildren.length > 0) {
+     let totalRightHeight = 0;
+     for (const child of rightChildren) {
+       totalRightHeight += subtreeHeights.get(child.id) || 0;
+     }
+     totalRightHeight += spacingY * (rightChildren.length - 1);
+     
+     let yCursor = rootNode.position.y - totalRightHeight / 2;
+     for (const child of rightChildren) {
+       const childHeight = subtreeHeights.get(child.id) || 0;
+       const childCenterY = yCursor + childHeight / 2;
+       positionSubtree(child.id, rootNode.position.x + spacingX, childCenterY, 1);
+       yCursor += childHeight + spacingY;
+     }
+  }
+
+  if (leftChildren.length > 0) {
+     let totalLeftHeight = 0;
+     for (const child of leftChildren) {
+       totalLeftHeight += subtreeHeights.get(child.id) || 0;
+     }
+     totalLeftHeight += spacingY * (leftChildren.length - 1);
+     
+     let yCursor = rootNode.position.y - totalLeftHeight / 2;
+     for (const child of leftChildren) {
+       const childHeight = subtreeHeights.get(child.id) || 0;
+       const childCenterY = yCursor + childHeight / 2;
+       positionSubtree(child.id, rootNode.position.x - spacingX, childCenterY, -1);
+       yCursor += childHeight + spacingY;
+     }
+  }
+}
+
+async function triggerAutoLayout() {
+  if (!currentPageId || !canvasManager || !commandStack || canvasManager['currentPlaybackTime']) return;
+
+  const nodes = canvasManager['nodes'];
+  const edges = canvasManager['edges'];
+  const rootNode = nodes.find((node) => !edges.some((edge) => edge.target === node.id));
+  if (!rootNode) return;
+
+  const newPositions = new Map<string, Position>();
+  const nodesCopy = nodes.map((n) => ({ ...n, position: { ...n.position } }));
+  runAutoLayout(nodesCopy, edges, rootNode, canvasManager, newPositions);
+
+  await commandStack.execute(
+    new AlignNodesCommand(currentPageId, newPositions, async () => {
+      await loadAndRenderCanvas();
+      await refreshTimeline();
+    })
+  );
+}
+
 // ドキュメント読み込み完了時の処理
 document.addEventListener('DOMContentLoaded', async () => {
   // DOMキャッシュ取得
   undoBtn = document.getElementById('undo-btn') as HTMLButtonElement;
   redoBtn = document.getElementById('redo-btn') as HTMLButtonElement;
+  alignBtn = document.getElementById('align-btn') as HTMLButtonElement;
   currentPageTitleInput = document.getElementById('current-page-title') as HTMLInputElement;
   zoomLevelSpan = document.getElementById('zoom-level') as HTMLSpanElement;
   zoomResetBtn = document.getElementById('zoom-reset-btn') as HTMLButtonElement;
@@ -447,6 +611,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // 3. Canvasのイベントコールバック設定
+  canvasManager.onRender = () => {
+    updateTextareaPosition();
+  };
+
   canvasManager.onZoomChanged = (scale) => {
     zoomLevelSpan.textContent = `${Math.round(scale * 100)}%`;
   };
@@ -468,9 +636,57 @@ document.addEventListener('DOMContentLoaded', async () => {
     const parentNode = canvasManager!['nodes'].find((n) => n.id === parentNodeId);
     if (!parentNode) return;
 
+    const nodes = canvasManager!['nodes'];
+    const edges = canvasManager!['edges'];
+    const isParentRoot = !edges.some((e) => e.target === parentNodeId);
+    const children = nodes.filter((n) => edges.some((e) => e.source === parentNodeId && e.target === n.id));
+
+    let side = 1; // 1 = right, -1 = left
+    if (isParentRoot) {
+      // 親がルートの場合、左右の既存の子ノード数を比較して少ない方に配置する
+      const rightChildrenCount = children.filter((c) => c.position.x > parentNode.position.x).length;
+      const leftChildrenCount = children.filter((c) => c.position.x < parentNode.position.x).length;
+      if (rightChildrenCount > leftChildrenCount) {
+        side = -1;
+      } else {
+        side = 1;
+      }
+    } else {
+      // 親がルート以外の場合、親と同じ側に配置する
+      const rootNode = nodes.find((n) => !edges.some((e) => e.target === n.id));
+      if (rootNode && parentNode.position.x < rootNode.position.x) {
+        side = -1;
+      } else {
+        side = 1;
+      }
+    }
+
+    const newX = parentNode.position.x + side * 240;
+
+    // Y座標の決定: 選択した側の既存の子ノードのY座標リストを取得し、重ならないスロットを探索する
+    const targetChildren = children.filter((c) => side === 1 ? c.position.x > parentNode.position.x : c.position.x < parentNode.position.x);
+    const existingYCoords = targetChildren.map((c) => c.position.y);
+
+    let slot = 0;
+    let targetY = parentNode.position.y;
+    while (true) {
+      let offsetY = 0;
+      if (slot > 0) {
+        const isOdd = slot % 2 !== 0;
+        const step = Math.ceil(slot / 2);
+        offsetY = isOdd ? 80 * step : -80 * step;
+      }
+      targetY = parentNode.position.y + offsetY;
+      const hasOverlap = existingYCoords.some((y) => Math.abs(y - targetY) < 40);
+      if (!hasOverlap) {
+        break;
+      }
+      slot++;
+    }
+
     const newPos = {
-      x: parentNode.position.x + 240,
-      y: parentNode.position.y + (Math.random() * 80 - 40)
+      x: newX,
+      y: targetY
     };
 
     const createdOut = { node: null as MindMapNode | null };
@@ -506,6 +722,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   canvasManager.onAddRootNode = async (pos) => {
     if (!currentPageId || !commandStack || canvasManager?.['currentPlaybackTime']) return;
+
+    // 既にルートノード（親エッジを持たないノード）が存在するかチェック
+    const nodes = canvasManager!['nodes'];
+    const edges = canvasManager!['edges'];
+    const hasRoot = nodes.some((node) => !edges.some((edge) => edge.target === node.id));
+    if (hasRoot) {
+      return;
+    }
 
     const createdOut = { node: null as MindMapNode | null };
 
@@ -671,6 +895,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         const parentEdge = edges.find((e) => e.target === nodeId);
         const parentId = parentEdge ? parentEdge.source : null;
 
+        if (parentId === null) {
+          // ルートノードの兄弟ノード（新たなルート）は作成できない
+          return;
+        }
+
         const node = canvasManager!['nodes'].find((n) => n.id === nodeId);
         if (!node) return;
 
@@ -730,9 +959,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       },
       onEditText: (nodeId) => {
         startInlineEdit(nodeId);
+      },
+      onAlign: () => {
+        triggerAutoLayout();
       }
     }
   );
+
+  alignBtn.addEventListener('click', () => {
+    triggerAutoLayout();
+  });
 
   // 6. タイムライン再生の初期化
   playbackManager = new PlaybackManager(canvasManager);
@@ -742,6 +978,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     undoBtn.disabled = isPast || (commandStack ? !commandStack.canUndo() : true);
     redoBtn.disabled = isPast || (commandStack ? !commandStack.canRedo() : true);
+    alignBtn.disabled = isPast;
     currentPageTitleInput.disabled = isPast;
     
     const newPageBtn = document.getElementById('new-page-btn') as HTMLButtonElement;

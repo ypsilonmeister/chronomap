@@ -17,7 +17,7 @@ export class PlaybackManager {
   private maxTime = 0;
   private currentTime = 0;
   private isPlaying = false;
-  private speedMultiplier = 1;
+  private targetDurationSeconds = 30;
   private lastFrameTime = 0;
   private animationFrameId: number | null = null;
 
@@ -32,6 +32,7 @@ export class PlaybackManager {
     this.currentTimeText = document.getElementById('current-time-text') as HTMLSpanElement;
     this.maxTimeText = document.getElementById('max-time-text') as HTMLSpanElement;
     this.speedSelect = document.getElementById('speed-select') as HTMLSelectElement;
+    this.targetDurationSeconds = parseInt(this.speedSelect.value, 10) || 30;
 
     this.initEvents();
   }
@@ -113,7 +114,7 @@ export class PlaybackManager {
 
     // 速度選択
     this.speedSelect.addEventListener('change', () => {
-      this.speedMultiplier = parseInt(this.speedSelect.value, 10);
+      this.targetDurationSeconds = parseInt(this.speedSelect.value, 10);
     });
   }
 
@@ -141,8 +142,9 @@ export class PlaybackManager {
       this.lastFrameTime = now;
 
       // 仮想時間を進める (dt * 速度)
-      // 1秒進むごとに、現実時間としての speedMultiplier 秒が進む
-      this.currentTime += dt * 1000 * this.speedMultiplier;
+      const totalTimelineMs = this.maxTime - this.minTime;
+      const virtualSpeed = totalTimelineMs > 0 ? totalTimelineMs / (this.targetDurationSeconds * 1000) : 1;
+      this.currentTime += dt * 1000 * virtualSpeed;
 
       if (this.currentTime >= this.maxTime) {
         this.currentTime = this.maxTime;
