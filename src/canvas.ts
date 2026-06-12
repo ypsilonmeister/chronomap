@@ -53,6 +53,8 @@ export class MindMapCanvas {
   public onAddChildNode: ((parentNodeId: string) => void) | null = null;
   public onAddRootNode: ((pos: Position) => void) | null = null;
   public onContextMenu: ((nodeId: string, x: number, y: number) => void) | null = null;
+  public onRadialSwipe: ((clientX: number, clientY: number) => void) | null = null;
+  public onRadialRelease: (() => void) | null = null;
   public onZoomChanged: ((scale: number) => void) | null = null;
   public onRender: (() => void) | null = null;
 
@@ -899,16 +901,8 @@ export class MindMapCanvas {
 
     if (e.touches.length === 1 && !this.isPinching) {
       if (this.isSwipeSelecting) {
-        const clientX = e.touches[0].clientX;
-        const clientY = e.touches[0].clientY;
-        const element = document.elementFromPoint(clientX, clientY);
-        const menuItem = element?.closest('.context-menu li') as HTMLElement | null;
-
-        const menuItems = document.querySelectorAll('.context-menu li');
-        menuItems.forEach((item) => item.classList.remove('active'));
-
-        if (menuItem) {
-          menuItem.classList.add('active');
+        if (this.onRadialSwipe) {
+          this.onRadialSwipe(e.touches[0].clientX, e.touches[0].clientY);
         }
         return;
       }
@@ -947,13 +941,9 @@ export class MindMapCanvas {
 
     if (this.isSwipeSelecting) {
       this.isSwipeSelecting = false;
-      const activeItem = document.querySelector('.context-menu li.active') as HTMLElement | null;
-      if (activeItem) {
-        activeItem.click();
+      if (this.onRadialRelease) {
+        this.onRadialRelease();
       }
-      
-      const menuItems = document.querySelectorAll('.context-menu li');
-      menuItems.forEach((item) => item.classList.remove('active'));
       return;
     }
 

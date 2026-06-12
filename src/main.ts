@@ -7,7 +7,7 @@ import { ShortcutManager } from './shortcuts';
 import { SidebarManager } from './sidebar';
 import { AudioSpeechRecognizer } from './audio';
 import { MediaManager } from './media';
-import { ContextMenuManager } from './context-menu';
+import { RadialMenuManager } from './radial-menu';
 import { PlaybackManager } from './playback';
 import { GoogleDriveSyncManager } from './sync';
 
@@ -17,7 +17,7 @@ let canvasManager: MindMapCanvas | null = null;
 let commandStack: CommandStack | null = null;
 let shortcutManager: ShortcutManager | null = null;
 let sidebarManager: SidebarManager | null = null;
-let contextMenuManager: ContextMenuManager | null = null;
+let radialMenuManager: RadialMenuManager | null = null;
 let speechRecognizer: AudioSpeechRecognizer | null = null;
 let playbackManager: PlaybackManager | null = null;
 let syncManager: GoogleDriveSyncManager | null = null;
@@ -83,8 +83,8 @@ async function selectPage(pageId: string) {
     commandStack.clear();
   }
 
-  // ノードコンテキストメニューやインラインテキストエリアは非表示にする
-  if (contextMenuManager) contextMenuManager.hide();
+  // 放射状メニューやインラインテキストエリアは非表示にする
+  if (radialMenuManager) radialMenuManager.hide();
   removeInlineTextarea();
   stopSpeechRecognition();
 }
@@ -449,115 +449,111 @@ function initUIEvents() {
   });
 }
 
-// 自動整列の座標計算アルゴリズム
+// 自動整列の座標計算アルゴリズム (放射状マインドマップレイアウト)
 function runAutoLayout(
   nodes: MindMapNode[],
   edges: Edge[],
   rootNode: MindMapNode,
-  canvas: MindMapCanvas,
   outPositions: Map<string, Position>
 ) {
   const getChildren = (nodeId: string) => {
     return nodes.filter((n) => edges.some((e) => e.source === nodeId && e.target === n.id));
   };
 
-  const children = getChildren(rootNode.id);
-  const rightChildren = children.filter((c) => c.position.x >= rootNode.position.x);
-  const leftChildren = children.filter((c) => c.position.x < rootNode.position.x);
-
-  const spacingX = 240;
-  const spacingY = 30;
-
-  const subtreeHeights = new Map<string, number>();
-
-  const getNodeHeight = (node: MindMapNode) => {
-    return canvas.calculateNodeSize(node).height;
-  };
-
-  const calculateSubtreeHeight = (nodeId: string): number => {
-    const node = nodes.find((n) => n.id === nodeId);
-    if (!node) return 0;
-    
+  // 各ノードのサブツリーに含まれる全ノード数（重み、最小1）を計算
+  const subtreeWeights = new Map<string, number>();
+  const calculateWeights = (nodeId: string): number => {
     const nodeChildren = getChildren(nodeId);
-    const ownHeight = getNodeHeight(node);
-    
     if (nodeChildren.length === 0) {
-      subtreeHeights.set(nodeId, ownHeight);
-      return ownHeight;
+      subtreeWeights.set(nodeId, 1);
+      return 1;
     }
-    
-    let childrenHeightSum = 0;
+    let weight = 0;
     for (const child of nodeChildren) {
-      childrenHeightSum += calculateSubtreeHeight(child.id);
+      weight += calculateWeights(child.id);
     }
-    childrenHeightSum += spacingY * (nodeChildren.length - 1);
-    
-    const height = Math.max(ownHeight, childrenHeightSum);
-    subtreeHeights.set(nodeId, height);
-    return height;
+    subtreeWeights.set(nodeId, weight);
+    return weight;
   };
 
-  for (const child of children) {
-    calculateSubtreeHeight(child.id);
-  }
+  calculateWeights(rootNode.id);
 
-  const positionSubtree = (nodeId: string, currentX: number, centerY: number, side: number) => {
-    const node = nodes.find((n) => n.id === nodeId);
-    if (!node) return;
-    
-    outPositions.set(nodeId, { x: currentX, y: centerY });
-    
-    const nodeChildren = getChildren(nodeId);
-    if (nodeChildren.length === 0) return;
-    
-    let totalChildrenHeight = 0;
-    for (const child of nodeChildren) {
-      totalChildrenHeight += subtreeHeights.get(child.id) || 0;
-    }
-    totalChildrenHeight += spacingY * (nodeChildren.length - 1);
-    
-    let yCursor = centerY - totalChildrenHeight / 2;
-    for (const child of nodeChildren) {
-      const childHeight = subtreeHeights.get(child.id) || 0;
-      const childCenterY = yCursor + childHeight / 2;
-      positionSubtree(child.id, currentX + side * spacingX, childCenterY, side);
-      yCursor += childHeight + spacingY;
-    }
-  };
-
-  // メインノードを中央 (0, 0) に配置
+  // ルートノードを中央に配置
   outPositions.set(rootNode.id, { x: 0, y: 0 });
 
-  if (rightChildren.length > 0) {
-      let totalRightHeight = 0;
-      for (const child of rightChildren) {
-        totalRightHeight += subtreeHeights.get(child.id) || 0;
-      }
-      totalRightHeight += spacingY * (rightChildren.length - 1);
+  const children = getChildren(rootNode.id);
+  if (children.length === 0) return;
+
+  const radiusStep = 240; // 階層ごとの距離
+
+  // 再帰的に放射状に子ノードを配置する関数
+  const layoutSubtree = (
+    nodeId: string,
+    parentX: number,
+    parentY: number,
+    startAngle: number,
+    endAngle: number
+  ) => {
+    const nodeChildren = getChildren(nodeId);
+    if (nodeChildren.length === 0) return;
+
+    let childrenWeightSum = 0;
+    for (const child of nodeChildren) {
+      childrenWeightSum += subtreeWeights.get(child.id) || 1;
+    }
+
+    const parentAngleSpan = endAngle - startAngle;
+    let currentAngle = startAngle;
+
+    for (const child of nodeChildren) {
+      const childWeight = subtreeWeights.get(child.id) || 1;
+      const angleSpan = parentAngleSpan * (childWeight / childrenWeightSum);
       
-      let yCursor = 0 - totalRightHeight / 2;
-      for (const child of rightChildren) {
-        const childHeight = subtreeHeights.get(child.id) || 0;
-        const childCenterY = yCursor + childHeight / 2;
-        positionSubtree(child.id, 0 + spacingX, childCenterY, 1);
-        yCursor += childHeight + spacingY;
-      }
+      const angle = currentAngle + angleSpan / 2;
+      const dist = 200; // 孫以降の距離はやや短めに
+
+      const childX = parentX + dist * Math.cos(angle);
+      const childY = parentY + dist * Math.sin(angle);
+
+      outPositions.set(child.id, { x: childX, y: childY });
+
+      // 親ノードの進行方向 angle を中心とした扇形に子ノードを広げる
+      const maxSpan = Math.PI / 1.5; // 最大120度
+      const childSpan = Math.min(angleSpan, maxSpan);
+      const childStart = angle - childSpan / 2;
+      const childEnd = angle + childSpan / 2;
+
+      layoutSubtree(child.id, childX, childY, childStart, childEnd);
+
+      currentAngle += angleSpan;
+    }
+  };
+
+  // ルートノードの直接の子ノードたちを 360 度に均等（または重みに応じて）配置
+  let currentAngle = 0;
+  let rootChildrenWeightSum = 0;
+  for (const c of children) {
+    rootChildrenWeightSum += subtreeWeights.get(c.id) || 1;
   }
 
-  if (leftChildren.length > 0) {
-     let totalLeftHeight = 0;
-     for (const child of leftChildren) {
-       totalLeftHeight += subtreeHeights.get(child.id) || 0;
-     }
-     totalLeftHeight += spacingY * (leftChildren.length - 1);
-     
-     let yCursor = rootNode.position.y - totalLeftHeight / 2;
-     for (const child of leftChildren) {
-       const childHeight = subtreeHeights.get(child.id) || 0;
-       const childCenterY = yCursor + childHeight / 2;
-       positionSubtree(child.id, rootNode.position.x - spacingX, childCenterY, -1);
-       yCursor += childHeight + spacingY;
-     }
+  for (const child of children) {
+    const childWeight = subtreeWeights.get(child.id) || 1;
+    const angleSpan = (2 * Math.PI) * (childWeight / rootChildrenWeightSum);
+    const angle = currentAngle + angleSpan / 2;
+
+    const childX = 0 + radiusStep * Math.cos(angle);
+    const childY = 0 + radiusStep * Math.sin(angle);
+
+    outPositions.set(child.id, { x: childX, y: childY });
+
+    // 孫ノード以降の配置
+    const maxSpan = children.length === 1 ? Math.PI : Math.min(angleSpan, Math.PI / 1.5);
+    const childStart = angle - maxSpan / 2;
+    const childEnd = angle + maxSpan / 2;
+
+    layoutSubtree(child.id, childX, childY, childStart, childEnd);
+
+    currentAngle += angleSpan;
   }
 }
 
@@ -571,7 +567,7 @@ async function triggerAutoLayout() {
 
   const newPositions = new Map<string, Position>();
   const nodesCopy = nodes.map((n) => ({ ...n, position: { ...n.position } }));
-  runAutoLayout(nodesCopy, edges, rootNode, canvasManager, newPositions);
+  runAutoLayout(nodesCopy, edges, rootNode, newPositions);
 
   await commandStack.execute(
     new AlignNodesCommand(currentPageId, newPositions, async () => {
@@ -784,13 +780,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
 
-  // 4. コンテキストメニューマネージャーの初期化
-  contextMenuManager = new ContextMenuManager();
+  // 4. 放射状メニューマネージャーの初期化
+  radialMenuManager = new RadialMenuManager();
   
   canvasManager.onContextMenu = (nodeId, clientX, clientY) => {
     if (canvasManager?.['currentPlaybackTime']) return;
 
-    contextMenuManager?.show(nodeId, clientX, clientY, {
+    radialMenuManager?.show(nodeId, clientX, clientY, {
       onEditText: (id) => {
         startInlineEdit(id);
       },
@@ -826,6 +822,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   };
 
+  canvasManager.onRadialSwipe = (clientX, clientY) => {
+    radialMenuManager?.updateHighlight(clientX, clientY);
+  };
+
+  canvasManager.onRadialRelease = () => {
+    radialMenuManager?.executeActiveAction();
+  };
+
   // 写真拡大表示用モーダル処理
   const imageModal = document.getElementById('image-modal') as HTMLElement;
   const modalImage = document.getElementById('modal-image') as HTMLImageElement;
@@ -837,7 +841,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
     
-    if (e.target !== canvasManager['canvas'] || document.querySelector('.canvas-textarea') || !contextMenuManager?.['menuEl'].classList.contains('hidden')) {
+    if (e.target !== canvasManager['canvas'] || document.querySelector('.canvas-textarea') || (radialMenuManager && radialMenuManager.isVisible())) {
       return;
     }
 
@@ -1017,7 +1021,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (isPast) {
       removeInlineTextarea();
-      contextMenuManager?.hide();
+      radialMenuManager?.hide();
       stopSpeechRecognition();
     }
   };

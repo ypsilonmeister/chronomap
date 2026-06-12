@@ -585,51 +585,111 @@ body, html {
   background-size: 10px;
 }
 
-/* フローティングコンテキストメニュー */
-.context-menu {
-  position: absolute;
+/* 放射状メニュー (パイメニュー) */
+.radial-menu {
+  position: fixed;
   z-index: 100;
-  width: 180px;
-  padding: 6px 0;
-  border-radius: var(--radius-sm);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
 }
 
-.context-menu ul {
-  list-style: none;
+.radial-menu.hidden {
+  display: none;
 }
 
-.context-menu li {
-  padding: 10px 16px;
+.radial-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.radial-item {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: auto;
   cursor: pointer;
-  font-size: 0.85rem;
+  transform:
+    translate(-50%, -50%)
+    rotate(var(--angle))
+    translateY(-70px)
+    rotate(calc(-1 * var(--angle)));
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.radial-menu.open .radial-item {
+  opacity: 1;
+}
+
+.radial-menu:not(.open) .radial-item {
+  transform:
+    translate(-50%, -50%)
+    rotate(var(--angle))
+    translateY(0px)
+    rotate(calc(-1 * var(--angle)));
+}
+
+.radial-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
   color: var(--text-secondary);
-  transition: var(--transition-smooth);
+  transition: all 0.2s ease;
 }
 
-.context-menu li i {
-  width: 16px;
-  height: 16px;
+.radial-icon i,
+.radial-icon svg {
+  width: 20px;
+  height: 20px;
 }
 
-.context-menu li:hover,
-.context-menu li.active {
-  background: rgba(255, 255, 255, 0.05);
+.radial-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  pointer-events: none;
+  transition: color 0.2s ease;
+}
+
+/* ホバー & アクティブ（スワイプ中のハイライト） */
+.radial-item:hover .radial-icon,
+.radial-item.active .radial-icon {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+  transform: scale(1.15);
+  box-shadow: var(--grad-glow-strong);
+}
+
+.radial-item:hover .radial-label,
+.radial-item.active .radial-label {
   color: var(--text-primary);
 }
 
-.context-menu li .shortcut {
-  margin-left: auto;
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
-
-.menu-danger:hover,
-.menu-danger.active {
-  background: rgba(239, 68, 68, 0.1) !important;
-  color: var(--color-danger) !important;
+/* 削除ボタンの危険色ハイライト */
+.radial-danger:hover .radial-icon,
+.radial-danger.active .radial-icon {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  color: #fff;
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.4);
 }
 
 /* モーダルウィンドウ共通 */

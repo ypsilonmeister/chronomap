@@ -121,14 +121,25 @@
       </footer>
     </main>
 
-    <!-- ノードの右クリック/ロングタップ時のコンテキストメニュー -->
-    <div id="node-context-menu" class="context-menu glass-panel hidden">
-      <ul>
-        <li id="menu-edit-text"><i data-lucide="edit-3"></i> テキスト編集 <span class="shortcut">F2</span></li>
-        <li id="menu-audio-input"><i data-lucide="mic"></i> 音声入力</li>
-        <li id="menu-attach-image"><i data-lucide="image"></i> 写真を添付</li>
-        <li id="menu-delete-node" class="menu-danger"><i data-lucide="trash-2"></i> ノードを削除 <span class="shortcut">Del</span></li>
-      </ul>
+    <!-- ノードの右クリック/ロングタップ時の放射状メニュー -->
+    <div id="radial-menu" class="radial-menu hidden">
+      <div class="radial-center"></div>
+      <div class="radial-item" data-action="edit" style="--angle: -90deg;">
+        <div class="radial-icon"><i data-lucide="edit-3"></i></div>
+        <span class="radial-label">編集</span>
+      </div>
+      <div class="radial-item" data-action="audio" style="--angle: 0deg;">
+        <div class="radial-icon"><i data-lucide="mic"></i></div>
+        <span class="radial-label">音声</span>
+      </div>
+      <div class="radial-item" data-action="image" style="--angle: 180deg;">
+        <div class="radial-icon"><i data-lucide="image"></i></div>
+        <span class="radial-label">写真</span>
+      </div>
+      <div class="radial-item radial-danger" data-action="delete" style="--angle: 90deg;">
+        <div class="radial-icon"><i data-lucide="trash-2"></i></div>
+        <span class="radial-label">削除</span>
+      </div>
     </div>
 
     <!-- 写真拡大表示用のモーダル -->
