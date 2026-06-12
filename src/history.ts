@@ -1,4 +1,5 @@
 import { MindMapNode, Edge, Position } from './types';
+import * as pageRepo from './data/page-repo';
 import * as nodeRepo from './data/node-repo';
 import * as edgeRepo from './data/edge-repo';
 import * as imageRepo from './data/image-repo';
@@ -29,7 +30,11 @@ export class CommandStack {
 
     const pageId = store.getState().currentPageId;
     if (pageId) {
-      await store.reloadPageData(pageId);
+      if (command instanceof UpdatePageTitleCommand) {
+        await store.reloadPages(pageId);
+      } else {
+        await store.reloadPageData(pageId);
+      }
     }
   }
 
@@ -42,7 +47,11 @@ export class CommandStack {
 
       const pageId = store.getState().currentPageId;
       if (pageId) {
-        await store.reloadPageData(pageId);
+        if (command instanceof UpdatePageTitleCommand) {
+          await store.reloadPages(pageId);
+        } else {
+          await store.reloadPageData(pageId);
+        }
       }
     }
   }
@@ -56,7 +65,11 @@ export class CommandStack {
 
       const pageId = store.getState().currentPageId;
       if (pageId) {
-        await store.reloadPageData(pageId);
+        if (command instanceof UpdatePageTitleCommand) {
+          await store.reloadPages(pageId);
+        } else {
+          await store.reloadPageData(pageId);
+        }
       }
     }
   }
@@ -335,5 +348,44 @@ export class AlignNodesCommand implements Command {
         positions: Array.from(this.originalPositions.entries())
       }
     });
+  }
+}
+
+// 6. ページタイトル変更コマンド
+export class UpdatePageTitleCommand implements Command {
+  private oldTitle = '';
+
+  constructor(
+    private pageId: string,
+    private newTitle: string
+  ) {}
+
+  async execute() {
+    const page = await pageRepo.getPage(this.pageId);
+    if (page) {
+      this.oldTitle = page.title;
+      await pageRepo.updatePage(this.pageId, { title: this.newTitle });
+
+      await eventlogRepo.addHistory({
+        pageId: this.pageId,
+        timestamp: new Date().toISOString(),
+        action: 'update_page_title',
+        payload: { title: this.newTitle }
+      });
+    }
+  }
+
+  async undo() {
+    const page = await pageRepo.getPage(this.pageId);
+    if (page) {
+      await pageRepo.updatePage(this.pageId, { title: this.oldTitle });
+
+      await eventlogRepo.addHistory({
+        pageId: this.pageId,
+        timestamp: new Date().toISOString(),
+        action: 'update_page_title',
+        payload: { title: this.oldTitle }
+      });
+    }
   }
 }
