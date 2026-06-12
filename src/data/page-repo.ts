@@ -1,5 +1,5 @@
 import { getDB, generateUUID } from './database';
-import { Page, MindMapNode } from '../types';
+import { Page, MindMapNode, Edge } from '../types';
 
 /**
  * 新しいページ（ノート）を作成します。
@@ -236,3 +236,184 @@ export async function updatePageTimestamp(pageId: string, timestamp: string): Pr
   }
   await tx.done;
 }
+
+/**
+ * JSONデータから新しいページをインポートします。
+ * 競合を避けるため、ページIDおよびノードID、エッジIDは新規に生成し直してマッピングします。
+ */
+export async function importPageJSON(jsonContent: string): Promise<string> {
+  const data = JSON.parse(jsonContent);
+  if (data.type !== 'chronomap-page-export' || !data.page || !Array.isArray(data.nodes) || !Array.isArray(data.edges)) {
+    throw new Error('無効なファイルフォーマットです。ChronoMap のエクスポートデータではありません。');
+  }
+
+  const db = await getDB();
+  const tx = db.transaction(['pages', 'nodes', 'edges', 'history', 'images'], 'readwrite');
+
+  const newPageId = generateUUID();
+  const now = new Date().toISOString();
+
+  // 1. ページの保存 (タイトルに (インポート) を付与)
+  const newPage: Page = {
+    pageId: newPageId,
+    title: `${data.page.title} (インポート)`,
+    createdAt: now,
+    updatedAt: now
+  };
+  await tx.objectStore('pages').put(newPage);
+
+  // 2. ノードIDのマッピング作成
+  const nodeIdMap = new Map<string, string>();
+  for (const node of data.nodes) {
+    nodeIdMap.set(node.id, generateUUID());
+  }
+
+  // 3. ノードの保存
+  const nodeStore = tx.objectStore('nodes');
+  const imageStore = tx.objectStore('images');
+  for (const node of data.nodes) {
+    const newNodeId = nodeIdMap.get(node.id)!;
+    const newMedia = { ...node.media };
+    
+    // 画像データがある場合は復元
+    if (node.media.hasImage && node.media.imageRef) {
+      const oldImgRef = node.media.imageRef;
+      const matchingImg = data.images?.find((img: any) => img.id === oldImgRef);
+      if (matchingImg) {
+        const newImgRef = `img-${newNodeId}`;
+        newMedia.imageRef = newImgRef;
+        
+        // base64をBlobにデコードして画像ストアに保存
+        const blob = base64ToBlob(matchingImg.data);
+        await imageStore.put({ id: newImgRef, blob });
+      }
+    }
+
+    const importedNode: MindMapNode = {
+      ...node,
+      id: newNodeId,
+      pageId: newPageId,
+      media: newMedia,
+      createdAt: node.createdAt || now,
+      updatedAt: node.updatedAt || now,
+      deleted: false
+    };
+    await nodeStore.put(importedNode);
+  }
+
+  // 4. エッジの保存
+  const edgeStore = tx.objectStore('edges');
+  for (const edge of data.edges) {
+    const newSource = nodeIdMap.get(edge.source);
+    const newTarget = nodeIdMap.get(edge.target);
+    if (newSource && newTarget) {
+      const importedEdge: Edge = {
+        ...edge,
+        id: generateUUID(),
+        pageId: newPageId,
+        source: newSource,
+        target: newTarget,
+        createdAt: edge.createdAt || now,
+        updatedAt: edge.updatedAt || now,
+        deleted: false
+      };
+      await edgeStore.put(importedEdge);
+    }
+  }
+
+  // 5. 操作履歴の保存とマッピング
+  const historyStore = tx.objectStore('history');
+  if (Array.isArray(data.histories)) {
+    for (const h of data.histories) {
+      const newPayload = mapHistoryPayload(h.action, h.payload, nodeIdMap, newPageId);
+      const importedHistory = {
+        ...h,
+        entryId: generateUUID(),
+        pageId: newPageId,
+        timestamp: h.timestamp || now,
+        payload: newPayload
+      };
+      delete (importedHistory as any).id; // 自動インクリメントキーは除外
+      await historyStore.put(importedHistory);
+    }
+  }
+
+  await tx.done;
+  return newPageId;
+}
+
+// 履歴ペイロード内IDのマッピングヘルパー
+function mapHistoryPayload(action: string, payload: any, nodeIdMap: Map<string, string>, newPageId: string): any {
+  if (!payload) return payload;
+  const p = { ...payload };
+
+  const mapNode = (node: any) => {
+    const newNodeId = nodeIdMap.get(node.id) || generateUUID();
+    nodeIdMap.set(node.id, newNodeId);
+    const newMedia = { ...node.media };
+    if (node.media?.hasImage && node.media?.imageRef?.startsWith('img-')) {
+      newMedia.imageRef = `img-${newNodeId}`;
+    }
+    return {
+      ...node,
+      id: newNodeId,
+      pageId: newPageId,
+      media: newMedia
+    };
+  };
+
+  const mapEdge = (edge: any) => {
+    return {
+      ...edge,
+      id: generateUUID(),
+      pageId: newPageId,
+      source: nodeIdMap.get(edge.source) || edge.source,
+      target: nodeIdMap.get(edge.target) || edge.target
+    };
+  };
+
+  if (action === 'create_node') {
+    if (p.node) {
+      p.node = mapNode(p.node);
+      p.parentNodeId = p.parentNodeId ? (nodeIdMap.get(p.parentNodeId) || p.parentNodeId) : null;
+    } else if (Array.isArray(p.nodes)) {
+      p.nodes = p.nodes.map(mapNode);
+      if (Array.isArray(p.edges)) {
+        p.edges = p.edges.map(mapEdge);
+      }
+    }
+  } else if (action === 'update_node') {
+    p.nodeId = nodeIdMap.get(p.nodeId) || p.nodeId;
+    if (p.media?.imageRef?.startsWith('img-')) {
+      p.media = { ...p.media, imageRef: `img-${p.nodeId}` };
+    }
+  } else if (action === 'delete_node') {
+    p.nodeId = nodeIdMap.get(p.nodeId) || p.nodeId;
+    if (Array.isArray(p.cascadeIds)) {
+      p.cascadeIds = p.cascadeIds.map((id: string) => nodeIdMap.get(id) || id);
+    }
+  } else if (action === 'move_node') {
+    if (p.nodeId) {
+      p.nodeId = nodeIdMap.get(p.nodeId) || p.nodeId;
+    } else if (Array.isArray(p.positions)) {
+      p.positions = p.positions.map(([id, pos]: [string, any]) => [nodeIdMap.get(id) || id, pos]);
+    }
+  } else if (action === 'create_edge') {
+    if (p.edge) {
+      p.edge = mapEdge(p.edge);
+    }
+  }
+  
+  return p;
+}
+
+function base64ToBlob(base64: string, mimeType = 'image/jpeg'): Blob {
+  const byteCharacters = atob(base64);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const byteArray = new Uint8Array(byteNumbers);
+  return new Blob([byteArray], { type: mimeType });
+}
+

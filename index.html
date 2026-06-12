@@ -20,9 +20,15 @@
     <aside id="sidebar" class="glass-panel">
       <div class="sidebar-header">
         <h1>ChronoMap</h1>
-        <button id="new-page-btn" class="btn btn-primary" title="新規ページ作成">
-          <i data-lucide="plus"></i> <span>新規ノート</span>
-        </button>
+        <div class="sidebar-actions-row">
+          <button id="new-page-btn" class="btn btn-primary" title="新規ページ作成">
+            <i data-lucide="plus"></i> <span>新規ノート</span>
+          </button>
+          <button id="import-btn" class="btn btn-secondary btn-icon-only" title="JSONからノートをインポート">
+            <i data-lucide="upload"></i>
+          </button>
+          <input type="file" id="import-file-input" accept=".json" style="display: none;">
+        </div>
       </div>
       
       <!-- 検索・ソート -->
@@ -77,6 +83,23 @@
           <button id="align-btn" class="btn-icon" title="自動整列 (Ctrl+Shift+L)" disabled>
             <i data-lucide="sparkles"></i>
           </button>
+          <!-- エクスポートドロップダウン -->
+          <div class="dropdown" id="export-dropdown">
+            <button id="export-btn" class="btn-icon" title="現在のノートをエクスポート" disabled>
+              <i data-lucide="download"></i>
+            </button>
+            <div id="export-menu" class="dropdown-menu glass-panel hidden">
+              <button class="dropdown-item" id="export-png-btn">
+                <i data-lucide="image"></i> <span>画像 (PNG) として書き出し</span>
+              </button>
+              <button class="dropdown-item" id="export-markdown-btn">
+                <i data-lucide="file-text"></i> <span>テキスト (Markdown) としてアウトライン出力</span>
+              </button>
+              <button class="dropdown-item" id="export-json-btn">
+                <i data-lucide="file-code"></i> <span>バックアップ (JSON) として保存</span>
+              </button>
+            </div>
+          </div>
           <!-- ヘルプボタン -->
           <button id="help-btn" class="btn-icon" title="ヘルプ・ショートカットキー">
             <i data-lucide="help-circle"></i>

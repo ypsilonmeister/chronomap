@@ -1,4 +1,4 @@
-import { createIcons, Plus, Search, CloudLightning, Menu, Undo2, Redo2, Sparkles, HelpCircle, Play, Pause, Edit3, Mic, Image, Trash2, X } from 'lucide';
+import { createIcons, Plus, Search, CloudLightning, Menu, Undo2, Redo2, Sparkles, HelpCircle, Play, Pause, Edit3, Mic, Image, Trash2, X, Download, Upload, FileText, FileCode } from 'lucide';
 import { MindMapNode } from './types';
 import { MindMapCanvas } from './canvas';
 import { CommandStack, AddNodeCommand, MoveNodeCommand, DeleteNodeCommand } from './history';
@@ -17,12 +17,14 @@ import { NodeEditorController } from './ui/node-editor';
 import { PageController } from './ui/page-controller';
 import { SyncController } from './ui/sync-controller';
 import { ImageViewerController } from './ui/image-viewer';
+import { ExportImportController } from './ui/export-import-controller';
 
 function initIcons() {
   createIcons({
-    icons: { Plus, Search, CloudLightning, Menu, Undo2, Redo2, Sparkles, HelpCircle, Play, Pause, Edit3, Mic, Image, Trash2, X }
+    icons: { Plus, Search, CloudLightning, Menu, Undo2, Redo2, Sparkles, HelpCircle, Play, Pause, Edit3, Mic, Image, Trash2, X, Download, Upload, FileText, FileCode }
   });
 }
+
 
 document.addEventListener('DOMContentLoaded', async () => {
   // DOM Elements Cache
@@ -101,10 +103,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const pageController = new PageController(commandStack, currentPageTitleInput);
   const syncController = new SyncController(syncManager, syncBtn, syncStatusText);
   const imageViewer = new ImageViewerController(canvasManager, radialMenuManager, document.getElementById('image-modal')!, document.getElementById('modal-image')! as HTMLImageElement, document.getElementById('close-modal-btn')! as HTMLButtonElement);
+  const exportImportController = new ExportImportController(canvasManager);
 
   pageController.initEvents();
   syncController.initEvents();
   imageViewer.initEvents();
+  exportImportController.initEvents();
+
 
   // Sidebar toggling & Help modals (Miscellaneous UI)
   const sidebar = document.getElementById('sidebar');

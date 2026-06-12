@@ -167,6 +167,13 @@ export class AppStore {
     return cloned.pageId;
   }
 
+  // ページインポート
+  public async importPage(jsonContent: string): Promise<string> {
+    const importedPageId = await pageRepo.importPageJSON(jsonContent);
+    await this.reloadPages(importedPageId);
+    return importedPageId;
+  }
+
   // ページ削除
   public async deletePage(pageId: string) {
     await pageRepo.deletePage(pageId);

@@ -255,6 +255,56 @@ export class MindMapCanvas {
     }
   }
 
+  /**
+   * 現在のマインドマップ全体を画像データURL (PNG) としてエクスポートします。
+   * @param forceFitToScreen エクスポート時に自動で全画面フィットさせるかどうか
+   * @param backgroundColor 背景色。指定しない場合はテーマの背景色を取得します
+   */
+  public exportToPNG(forceFitToScreen = true, backgroundColor?: string): string {
+    const originalScale = this.scale;
+    const originalOffsetX = this.offsetX;
+    const originalOffsetY = this.offsetY;
+
+    if (forceFitToScreen) {
+      this.fitToScreen();
+    }
+
+    const rect = this.canvas.getBoundingClientRect();
+    const width = rect.width;
+    const height = rect.height;
+
+    // 一時的な背景色の決定 (CSS変数 --bg-primary から取得、フォールバックは #0b0f19)
+    const bg = backgroundColor || getComputedStyle(document.body).getPropertyValue('--bg-primary').trim() || '#0b0f19';
+
+    // 背景を描画してクリア
+    this.ctx.clearRect(0, 0, width, height);
+    this.ctx.fillStyle = bg;
+    this.ctx.fillRect(0, 0, width, height);
+
+    this.ctx.save();
+    
+    // ズーム & パンの適用
+    this.ctx.translate(width / 2 + this.offsetX, height / 2 + this.offsetY);
+    this.ctx.scale(this.scale, this.scale);
+
+    // エッジ & ノードの描画
+    this.drawEdges();
+    this.drawNodes(width, height);
+
+    this.ctx.restore();
+
+    // 画像URLの取得
+    const dataUrl = this.canvas.toDataURL('image/png');
+
+    // 状態を復元
+    this.scale = originalScale;
+    this.offsetX = originalOffsetX;
+    this.offsetY = originalOffsetY;
+    this.requestRender();
+
+    return dataUrl;
+  }
+
   // 選択ノードの取得・設定
   public getSelectedNodeId(): string | null {
     return this.selectedNodeId;
