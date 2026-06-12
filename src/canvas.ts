@@ -37,6 +37,7 @@ export class MindMapCanvas {
   private imageCache = new Map<string, HTMLImageElement>();
   private currentPlaybackTime: string | null = null;
   private longTapTimer: number | null = null;
+  private isSwipeSelecting = false;
 
   // 定数
   private readonly NODE_MAX_WIDTH = 180;
@@ -92,6 +93,65 @@ export class MindMapCanvas {
     this.scale = 1;
     this.offsetX = 0;
     this.offsetY = 0;
+    this.requestRender();
+    if (this.onZoomChanged) {
+      this.onZoomChanged(this.scale);
+    }
+  }
+
+  // 全画面フィット機能
+  public fitToScreen() {
+    const targetNodes = this.filteredNodes.length > 0 ? this.filteredNodes : this.nodes;
+    if (targetNodes.length === 0) {
+      this.resetZoom();
+      return;
+    }
+
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+
+    for (const node of targetNodes) {
+      const size = this.calculateNodeSize(node);
+      const left = node.position.x - size.width / 2;
+      const right = node.position.x + size.width / 2;
+      const top = node.position.y - size.height / 2;
+      const bottom = node.position.y + size.height / 2;
+
+      if (left < minX) minX = left;
+      if (right > maxX) maxX = right;
+      if (top < minY) minY = top;
+      if (bottom > maxY) maxY = bottom;
+    }
+
+    const w = maxX - minX;
+    const h = maxY - minY;
+
+    const rect = this.canvas.getBoundingClientRect();
+    const canvasW = rect.width;
+    const canvasH = rect.height;
+
+    // パディングを設定 (上下左右に十分な余白を設定)
+    const padding = 60;
+    const availableW = Math.max(canvasW - padding * 2, 100);
+    const availableH = Math.max(canvasH - padding * 2, 100);
+
+    let targetScale = 1;
+    if (w > 0 && h > 0) {
+      targetScale = Math.min(availableW / w, availableH / h);
+    }
+
+    // スケール制限 (0.2 ~ 3.0)
+    targetScale = Math.min(Math.max(targetScale, 0.2), 3.0);
+
+    const centerX = minX + w / 2;
+    const centerY = minY + h / 2;
+
+    this.scale = targetScale;
+    this.offsetX = -centerX * targetScale;
+    this.offsetY = -centerY * targetScale;
+
     this.requestRender();
     if (this.onZoomChanged) {
       this.onZoomChanged(this.scale);
@@ -789,10 +849,13 @@ export class MindMapCanvas {
 
         // ロングタップの検知（長押しコンテキストメニュー）
         if (this.longTapTimer) window.clearTimeout(this.longTapTimer);
+        this.isSwipeSelecting = false;
         this.longTapTimer = window.setTimeout(() => {
           this.longTapTimer = null;
           if (this.onContextMenu && !this.isPanning && !this.isPinching) {
             this.onContextMenu(hitNode.id, e.touches[0].clientX, e.touches[0].clientY);
+            this.isSwipeSelecting = true;
+            this.draggedNodeId = null;
           }
         }, 500);
       } else {
@@ -835,6 +898,21 @@ export class MindMapCanvas {
     }
 
     if (e.touches.length === 1 && !this.isPinching) {
+      if (this.isSwipeSelecting) {
+        const clientX = e.touches[0].clientX;
+        const clientY = e.touches[0].clientY;
+        const element = document.elementFromPoint(clientX, clientY);
+        const menuItem = element?.closest('.context-menu li') as HTMLElement | null;
+
+        const menuItems = document.querySelectorAll('.context-menu li');
+        menuItems.forEach((item) => item.classList.remove('active'));
+
+        if (menuItem) {
+          menuItem.classList.add('active');
+        }
+        return;
+      }
+
       if (this.longTapTimer) {
         window.clearTimeout(this.longTapTimer);
         this.longTapTimer = null;
@@ -865,6 +943,18 @@ export class MindMapCanvas {
     if (this.longTapTimer) {
       window.clearTimeout(this.longTapTimer);
       this.longTapTimer = null;
+    }
+
+    if (this.isSwipeSelecting) {
+      this.isSwipeSelecting = false;
+      const activeItem = document.querySelector('.context-menu li.active') as HTMLElement | null;
+      if (activeItem) {
+        activeItem.click();
+      }
+      
+      const menuItems = document.querySelectorAll('.context-menu li');
+      menuItems.forEach((item) => item.classList.remove('active'));
+      return;
     }
 
     // ピンチ終了判定 (指が1本以下になったらピンチ終了)

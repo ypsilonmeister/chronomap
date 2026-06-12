@@ -30,6 +30,7 @@ let redoBtn: HTMLButtonElement;
 let alignBtn: HTMLButtonElement;
 let currentPageTitleInput: HTMLInputElement;
 let zoomLevelSpan: HTMLSpanElement;
+let zoomFitBtn: HTMLButtonElement;
 let zoomResetBtn: HTMLButtonElement;
 let recordingToast: HTMLElement;
 let stopRecordingBtn: HTMLButtonElement;
@@ -407,6 +408,11 @@ function initUIEvents() {
     if (commandStack) commandStack.redo();
   });
 
+  // ズームフィットボタン
+  zoomFitBtn.addEventListener('click', () => {
+    if (canvasManager) canvasManager.fitToScreen();
+  });
+
   // ズームリセットボタン
   zoomResetBtn.addEventListener('click', () => {
     if (canvasManager) canvasManager.resetZoom();
@@ -519,20 +525,23 @@ function runAutoLayout(
     }
   };
 
+  // メインノードを中央 (0, 0) に配置
+  outPositions.set(rootNode.id, { x: 0, y: 0 });
+
   if (rightChildren.length > 0) {
-     let totalRightHeight = 0;
-     for (const child of rightChildren) {
-       totalRightHeight += subtreeHeights.get(child.id) || 0;
-     }
-     totalRightHeight += spacingY * (rightChildren.length - 1);
-     
-     let yCursor = rootNode.position.y - totalRightHeight / 2;
-     for (const child of rightChildren) {
-       const childHeight = subtreeHeights.get(child.id) || 0;
-       const childCenterY = yCursor + childHeight / 2;
-       positionSubtree(child.id, rootNode.position.x + spacingX, childCenterY, 1);
-       yCursor += childHeight + spacingY;
-     }
+      let totalRightHeight = 0;
+      for (const child of rightChildren) {
+        totalRightHeight += subtreeHeights.get(child.id) || 0;
+      }
+      totalRightHeight += spacingY * (rightChildren.length - 1);
+      
+      let yCursor = 0 - totalRightHeight / 2;
+      for (const child of rightChildren) {
+        const childHeight = subtreeHeights.get(child.id) || 0;
+        const childCenterY = yCursor + childHeight / 2;
+        positionSubtree(child.id, 0 + spacingX, childCenterY, 1);
+        yCursor += childHeight + spacingY;
+      }
   }
 
   if (leftChildren.length > 0) {
@@ -580,6 +589,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   alignBtn = document.getElementById('align-btn') as HTMLButtonElement;
   currentPageTitleInput = document.getElementById('current-page-title') as HTMLInputElement;
   zoomLevelSpan = document.getElementById('zoom-level') as HTMLSpanElement;
+  zoomFitBtn = document.getElementById('zoom-fit-btn') as HTMLButtonElement;
   zoomResetBtn = document.getElementById('zoom-reset-btn') as HTMLButtonElement;
   recordingToast = document.getElementById('recording-toast') as HTMLElement;
   stopRecordingBtn = document.getElementById('stop-recording-btn') as HTMLButtonElement;
@@ -980,6 +990,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       },
       onAlign: () => {
         triggerAutoLayout();
+      },
+      onZoomFit: () => {
+        if (canvasManager) canvasManager.fitToScreen();
       }
     }
   );

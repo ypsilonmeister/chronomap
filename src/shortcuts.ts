@@ -6,6 +6,7 @@ export interface ShortcutCallbacks {
   onDeleteNode: (nodeId: string) => void;
   onEditText: (nodeId: string) => void;
   onAlign: () => void;
+  onZoomFit?: () => void;
 }
 
 export class ShortcutManager {
@@ -56,6 +57,18 @@ export class ShortcutManager {
       } else if (e.key.toLowerCase() === 'l' && e.shiftKey) {
         e.preventDefault();
         this.callbacks.onAlign();
+        return;
+      }
+    }
+
+    // Fキーによる全画面フィット
+    if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey) {
+      const activeEl = document.activeElement;
+      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+        // テキスト入力中は無視
+      } else {
+        e.preventDefault();
+        this.callbacks.onZoomFit?.();
         return;
       }
     }
