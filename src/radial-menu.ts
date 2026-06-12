@@ -18,14 +18,16 @@ export class RadialMenuManager {
   private activeAction: string | null = null;
   private centerX = 0;
   private centerY = 0;
+  private touchStartX = 0;
+  private touchStartY = 0;
   private readonly RADIUS = 70;
   private readonly DEAD_ZONE = 20;
 
   private actions: RadialAction[] = [
-    { action: 'edit',   angle: -90, callback: null },  // 上
-    { action: 'audio',  angle: 0,   callback: null },  // 右
-    { action: 'delete', angle: 90,  callback: null },  // 下
-    { action: 'image',  angle: 180, callback: null },  // 左
+    { action: 'audio',  angle: -90, callback: null },  // 上 (音声)
+    { action: 'delete', angle: 0,   callback: null },  // 右 (削除)
+    { action: 'image',  angle: 90,  callback: null },  // 下 (写真)
+    { action: 'edit',   angle: 180, callback: null },  // 左 (編集)
   ];
 
   constructor() {
@@ -78,6 +80,8 @@ export class RadialMenuManager {
     this.currentNodeId = nodeId;
     this.callbacks = callbacks;
     this.activeAction = null;
+    this.touchStartX = x;
+    this.touchStartY = y;
 
     // 画面端に近い場合、中心をずらす
     const margin = this.RADIUS + 40;
@@ -115,8 +119,8 @@ export class RadialMenuManager {
 
   // タッチ移動時のハイライト更新
   public updateHighlight(clientX: number, clientY: number) {
-    const dx = clientX - this.centerX;
-    const dy = clientY - this.centerY;
+    const dx = clientX - this.touchStartX;
+    const dy = clientY - this.touchStartY;
     const distance = Math.hypot(dx, dy);
 
     this.clearHighlight();
