@@ -3,6 +3,7 @@ import * as nodeRepo from './data/node-repo';
 import * as edgeRepo from './data/edge-repo';
 import * as imageRepo from './data/image-repo';
 import * as eventlogRepo from './data/eventlog-repo';
+import { store } from './app/store';
 
 // コマンドインターフェース
 export interface Command {
@@ -25,6 +26,11 @@ export class CommandStack {
     this.undoStack.push(command);
     this.redoStack = []; // 新しい操作が行われたらRedoスタックはクリア
     this.onStackChanged();
+
+    const pageId = store.getState().currentPageId;
+    if (pageId) {
+      await store.reloadPageData(pageId);
+    }
   }
 
   public async undo() {
@@ -33,6 +39,11 @@ export class CommandStack {
       await command.undo();
       this.redoStack.push(command);
       this.onStackChanged();
+
+      const pageId = store.getState().currentPageId;
+      if (pageId) {
+        await store.reloadPageData(pageId);
+      }
     }
   }
 
@@ -42,6 +53,11 @@ export class CommandStack {
       await command.execute();
       this.undoStack.push(command);
       this.onStackChanged();
+
+      const pageId = store.getState().currentPageId;
+      if (pageId) {
+        await store.reloadPageData(pageId);
+      }
     }
   }
 
@@ -69,7 +85,6 @@ export class AddNodeCommand implements Command {
   constructor(
     private nodeData: Omit<MindMapNode, 'id' | 'createdAt' | 'updatedAt'>,
     private parentNodeId: string | null, // 親ノードID（ルートの場合はnull）
-    private callback: () => void,
     private createdNodeOut?: { node: MindMapNode | null } // 作成されたノードID返却用
   ) {}
 
@@ -78,7 +93,6 @@ export class AddNodeCommand implements Command {
 
   async execute() {
     if (this.node) {
-      // 2回目以降（Redo）は既存ノード・エッジの復元（元のIDを維持する）
       const now = new Date().toISOString();
       this.node.createdAt = now;
       this.node.updatedAt = now;
@@ -96,15 +110,12 @@ export class AddNodeCommand implements Command {
         ...this.nodeData
       };
       
-      // ノード保存
       this.node = await nodeRepo.createNode(nodeObj);
       
-      // 戻り値設定
       if (this.createdNodeOut) {
         this.createdNodeOut.node = this.node;
       }
 
-      // エッジの追加
       if (this.parentNodeId) {
         this.edge = await edgeRepo.createEdge({
           pageId: this.node.pageId,
@@ -113,7 +124,6 @@ export class AddNodeCommand implements Command {
         });
       }
 
-      // タイムライン再生用ログの保存
       await eventlogRepo.addHistory({
         pageId: this.node.pageId,
         timestamp: this.node.createdAt,
@@ -124,20 +134,15 @@ export class AddNodeCommand implements Command {
         }
       });
     }
-
-    this.callback();
   }
 
   async undo() {
     if (this.node) {
-      // エッジ削除
       if (this.edge) {
         await edgeRepo.deleteEdge(this.edge.id);
       }
-      // ノード削除
       await nodeRepo.deleteNode(this.node.id);
 
-      // タイムライン再生用ログの保存 (Undoもログに残すことで再生の完全性を担保)
       await eventlogRepo.addHistory({
         pageId: this.node.pageId,
         timestamp: new Date().toISOString(),
@@ -147,7 +152,6 @@ export class AddNodeCommand implements Command {
         }
       });
     }
-    this.callback();
   }
 }
 
@@ -157,8 +161,7 @@ export class MoveNodeCommand implements Command {
 
   constructor(
     private nodeId: string,
-    private newPos: Position,
-    private callback: () => void
+    private newPos: Position
   ) {
     this.oldPos = { x: 0, y: 0 };
   }
@@ -169,7 +172,6 @@ export class MoveNodeCommand implements Command {
       this.oldPos = { ...node.position };
       await nodeRepo.updateNode(this.nodeId, { position: this.newPos });
 
-      // タイムライン再生用ログの保存
       await eventlogRepo.addHistory({
         pageId: node.pageId,
         timestamp: new Date().toISOString(),
@@ -180,7 +182,6 @@ export class MoveNodeCommand implements Command {
         }
       });
     }
-    this.callback();
   }
 
   async undo() {
@@ -188,7 +189,6 @@ export class MoveNodeCommand implements Command {
     if (node) {
       await nodeRepo.updateNode(this.nodeId, { position: this.oldPos });
 
-      // タイムライン再生用ログの保存
       await eventlogRepo.addHistory({
         pageId: node.pageId,
         timestamp: new Date().toISOString(),
@@ -199,7 +199,6 @@ export class MoveNodeCommand implements Command {
         }
       });
     }
-    this.callback();
   }
 }
 
@@ -209,8 +208,7 @@ export class UpdateNodeTextCommand implements Command {
 
   constructor(
     private nodeId: string,
-    private newText: string,
-    private callback: () => void
+    private newText: string
   ) {}
 
   async execute() {
@@ -219,7 +217,6 @@ export class UpdateNodeTextCommand implements Command {
       this.oldText = node.text;
       await nodeRepo.updateNode(this.nodeId, { text: this.newText });
 
-      // タイムライン再生用ログの保存
       await eventlogRepo.addHistory({
         pageId: node.pageId,
         timestamp: new Date().toISOString(),
@@ -230,7 +227,6 @@ export class UpdateNodeTextCommand implements Command {
         }
       });
     }
-    this.callback();
   }
 
   async undo() {
@@ -238,7 +234,6 @@ export class UpdateNodeTextCommand implements Command {
     if (node) {
       await nodeRepo.updateNode(this.nodeId, { text: this.oldText });
 
-      // タイムライン再生用ログの保存
       await eventlogRepo.addHistory({
         pageId: node.pageId,
         timestamp: new Date().toISOString(),
@@ -249,7 +244,6 @@ export class UpdateNodeTextCommand implements Command {
         }
       });
     }
-    this.callback();
   }
 }
 
@@ -261,8 +255,7 @@ export class DeleteNodeCommand implements Command {
   private pageId = '';
 
   constructor(
-    private targetNodeId: string,
-    private callback: () => void
+    private targetNodeId: string
   ) {}
 
   async execute() {
@@ -271,13 +264,11 @@ export class DeleteNodeCommand implements Command {
     
     this.pageId = node.pageId;
 
-    // 削除対象のノードと接続されているエッジ・画像を再帰的に論理削除
     const { deletedNodes, deletedEdges, deletedImages } = await nodeRepo.cascadeSoftDelete(this.targetNodeId);
     this.deletedNodes = deletedNodes;
     this.deletedEdges = deletedEdges;
     this.deletedImages = deletedImages;
 
-    // タイムライン再生用ログの保存
     await eventlogRepo.addHistory({
       pageId: this.pageId,
       timestamp: new Date().toISOString(),
@@ -287,19 +278,13 @@ export class DeleteNodeCommand implements Command {
         cascadeIds: this.deletedNodes.map((n) => n.id)
       }
     });
-
-    this.callback();
   }
 
   async undo() {
-    // 画像の復元
     await imageRepo.restoreImages(this.deletedImages);
-    // ノードの復元
     await nodeRepo.restoreNodes(this.deletedNodes);
-    // エッジの復元
     await edgeRepo.restoreEdges(this.deletedEdges);
 
-    // タイムライン再生用ログの保存
     await eventlogRepo.addHistory({
       pageId: this.pageId,
       timestamp: new Date().toISOString(),
@@ -309,8 +294,6 @@ export class DeleteNodeCommand implements Command {
         edges: this.deletedEdges
       }
     });
-
-    this.callback();
   }
 }
 
@@ -320,8 +303,7 @@ export class AlignNodesCommand implements Command {
 
   constructor(
     private pageId: string,
-    private newPositions: Map<string, Position>,
-    private callback: () => void
+    private newPositions: Map<string, Position>
   ) {}
 
   async execute() {
@@ -332,7 +314,6 @@ export class AlignNodesCommand implements Command {
 
     await nodeRepo.updateNodePositions(Array.from(this.newPositions.entries()));
 
-    // タイムライン再生用ログの保存
     await eventlogRepo.addHistory({
       pageId: this.pageId,
       timestamp: new Date().toISOString(),
@@ -341,14 +322,11 @@ export class AlignNodesCommand implements Command {
         positions: Array.from(this.newPositions.entries())
       }
     });
-
-    this.callback();
   }
 
   async undo() {
     await nodeRepo.updateNodePositions(Array.from(this.originalPositions.entries()));
 
-    // タイムライン再生用ログの保存
     await eventlogRepo.addHistory({
       pageId: this.pageId,
       timestamp: new Date().toISOString(),
@@ -357,7 +335,5 @@ export class AlignNodesCommand implements Command {
         positions: Array.from(this.originalPositions.entries())
       }
     });
-
-    this.callback();
   }
 }

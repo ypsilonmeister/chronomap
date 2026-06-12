@@ -1,6 +1,5 @@
 import { Page } from './types';
-import * as pageRepo from './data/page-repo';
-import * as nodeRepo from './data/node-repo';
+import { store } from './app/store';
 import { createIcons, Trash2, Copy } from 'lucide';
 
 export class SidebarManager {
@@ -16,20 +15,7 @@ export class SidebarManager {
   private searchQuery = '';
   private sortKey = 'updatedAt_desc';
 
-  // コールバック
-  public onPageSelected: (pageId: string) => void;
-  public onPageDeleted: (pageId: string) => void;
-  public onPageCreated: (pageId: string) => void;
-
-  constructor(
-    onPageSelected: (pageId: string) => void,
-    onPageDeleted: (pageId: string) => void,
-    onPageCreated: (pageId: string) => void
-  ) {
-    this.onPageSelected = onPageSelected;
-    this.onPageDeleted = onPageDeleted;
-    this.onPageCreated = onPageCreated;
-
+  constructor() {
     // DOM 取得
     this.pageListEl = document.getElementById('page-list') as HTMLUListElement;
     this.newPageBtn = document.getElementById('new-page-btn') as HTMLButtonElement;
@@ -37,17 +23,17 @@ export class SidebarManager {
     this.sortSelect = document.getElementById('sort-select') as HTMLSelectElement;
 
     this.initEvents();
-  }
 
-  // 初期ロード
-  public async loadPages(selectedPageId: string | null = null) {
-    this.summaries = await pageRepo.getPageSummaries();
-    this.currentPageId = selectedPageId;
-    await this.render();
+    // Store に購読
+    store.subscribe((state) => {
+      this.summaries = state.pageSummaries;
+      this.currentPageId = state.currentPageId;
+      this.render();
+    });
   }
 
   // ページ一覧の描画
-  private async render() {
+  private render() {
     this.pageListEl.innerHTML = '';
     
     // ソートの適用
@@ -112,7 +98,7 @@ export class SidebarManager {
           return;
         }
         
-        this.selectPage(page.pageId);
+        store.selectPage(page.pageId);
       });
 
       // 複製ボタンイベント
@@ -120,9 +106,7 @@ export class SidebarManager {
       cloneBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         try {
-          const cloned = await pageRepo.clonePage(page.pageId);
-          await this.loadPages(cloned.pageId);
-          this.onPageCreated(cloned.pageId);
+          await store.clonePage(page.pageId);
         } catch (err) {
           console.error('Failed to clone page:', err);
         }
@@ -134,8 +118,7 @@ export class SidebarManager {
         e.stopPropagation();
         if (confirm(`ノート「${page.title}」を削除しますか？\n配下のエッジ、音声、写真データもすべて消去されます。`)) {
           try {
-            await pageRepo.deletePage(page.pageId);
-            this.onPageDeleted(page.pageId);
+            await store.deletePage(page.pageId);
           } catch (err) {
             console.error('Failed to delete page:', err);
           }
@@ -154,45 +137,12 @@ export class SidebarManager {
     });
   }
 
-  // ページ選択
-  private selectPage(pageId: string) {
-    if (this.currentPageId === pageId) return;
-    this.currentPageId = pageId;
-    
-    const items = this.pageListEl.querySelectorAll('.page-item');
-    items.forEach((item) => {
-      const el = item as HTMLElement;
-      if (el.dataset.id === pageId) {
-        el.classList.add('active');
-      } else {
-        el.classList.remove('active');
-      }
-    });
-
-    this.onPageSelected(pageId);
-  }
-
   // イベント初期化
   private initEvents() {
     // 新規作成ボタン
     this.newPageBtn.addEventListener('click', async () => {
       try {
-        const newPage = await pageRepo.createPage('無題のノート');
-        // 中心ルートノードを作成する
-        await nodeRepo.createNode({
-          pageId: newPage.pageId,
-          text: '中心テーマ',
-          media: {
-            hasImage: false,
-            imageRef: '',
-            hasAudio: false,
-            audioRef: ''
-          },
-          position: { x: 0, y: 0 }
-        });
-        
-        await this.loadPages(newPage.pageId);
-        this.onPageCreated(newPage.pageId);
+        await store.createPage('無題のノート');
       } catch (err) {
         console.error('Failed to create page:', err);
       }

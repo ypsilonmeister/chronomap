@@ -1,11 +1,7 @@
-import * as nodeRepo from './data/node-repo';
-import * as edgeRepo from './data/edge-repo';
-import { MindMapCanvas } from './canvas';
+import { store } from './app/store';
 import { createIcons, Play, Pause } from 'lucide';
 
 export class PlaybackManager {
-  private canvas: MindMapCanvas;
-  
   // DOM
   private slider: HTMLInputElement;
   private playBtn: HTMLButtonElement;
@@ -22,12 +18,7 @@ export class PlaybackManager {
   private currentTime = 0;
   private isPlaying = false;
 
-  // コールバック
-  public onTimeChanged: ((timeIso: string | null) => void) | null = null;
-
-  constructor(canvas: MindMapCanvas) {
-    this.canvas = canvas;
-
+  constructor() {
     this.slider = document.getElementById('timeline-slider') as HTMLInputElement;
     this.playBtn = document.getElementById('play-btn') as HTMLButtonElement;
     this.currentTimeText = document.getElementById('current-time-text') as HTMLSpanElement;
@@ -46,11 +37,20 @@ export class PlaybackManager {
   public async initPage(pageId: string) {
     this.stop();
 
-    const nodes = await nodeRepo.getNodesByPage(pageId);
-    const edges = await edgeRepo.getEdgesByPage(pageId);
+    if (!pageId) {
+      this.minTime = Date.now();
+      this.maxTime = this.minTime;
+      this.slider.disabled = true;
+      this.playBtn.disabled = true;
+      this.updateTimeDisplay();
+      return;
+    }
+
+    const state = store.getState();
+    const nodes = state.nodes;
+    const edges = state.edges;
 
     if (nodes.length === 0) {
-      // ノードがない場合は無効化
       this.minTime = Date.now();
       this.maxTime = this.minTime;
       this.slider.disabled = true;
@@ -76,14 +76,13 @@ export class PlaybackManager {
     for (const edge of edges) {
       const created = new Date(edge.createdAt).getTime();
       if (created < minMs) minMs = created;
-      // エッジの更新時間は通常考慮しないが作成時間は考慮
       if (created > maxMs) maxMs = created;
     }
 
-    // もし極端な誤差があった場合や同一時刻だった場合のバッファ
+    // 同一時刻だった場合のバッファ
     if (minMs === maxMs) {
-      minMs -= 5000; // 5秒前
-      maxMs += 5000; // 5秒後
+      minMs -= 5000;
+      maxMs += 5000;
     }
 
     this.minTime = minMs;
@@ -127,7 +126,6 @@ export class PlaybackManager {
   public play() {
     if (this.isPlaying) return;
 
-    // もし既に最大時間 (右端) に達している場合は、最初から再生する
     if (this.currentTime >= this.maxTime) {
       this.currentTime = this.minTime;
       this.slider.value = this.minTime.toString();
@@ -143,10 +141,10 @@ export class PlaybackManager {
     const tick = (now: number) => {
       if (!this.isPlaying) return;
 
-      const dt = (now - this.lastFrameTime) / 1000; // 秒単位
+      const dt = (now - this.lastFrameTime) / 1000;
       this.lastFrameTime = now;
 
-      // 仮想時間を進める (dt * 速度)
+      // 仮想時間を進める
       const totalTimelineMs = this.maxTime - this.minTime;
       const virtualSpeed = totalTimelineMs > 0 ? totalTimelineMs / (this.targetDurationSeconds * 1000) : 1;
       this.currentTime += dt * 1000 * virtualSpeed;
@@ -154,7 +152,7 @@ export class PlaybackManager {
       if (this.currentTime >= this.maxTime) {
         this.currentTime = this.maxTime;
         this.slider.value = this.maxTime.toString();
-        this.stop(); // 右端に到達したら自動停止
+        this.stop(); // 自動停止
       } else {
         this.slider.value = this.currentTime.toString();
         this.updateTimeDisplay();
@@ -188,17 +186,12 @@ export class PlaybackManager {
     this.notifyTimeChange();
   }
 
-  // 時間変更通知
+  // 時間変更通知 (Storeへの書込み)
   private notifyTimeChange() {
-    // スライダーが最大時間 (右端) にあるときは、フィルターなしの最新状態とする (null)
-    const isAtEnd = Math.abs(this.currentTime - this.maxTime) < 1000; // 1秒未満の差
+    const isAtEnd = Math.abs(this.currentTime - this.maxTime) < 1000;
     const isoString = isAtEnd ? null : new Date(this.currentTime).toISOString();
     
-    this.canvas.setPlaybackTime(isoString);
-
-    if (this.onTimeChanged) {
-      this.onTimeChanged(isoString);
-    }
+    store.setPlaybackTime(isoString);
   }
 
   // 時刻表示テキストの更新
@@ -213,7 +206,6 @@ export class PlaybackManager {
     this.maxTimeText.textContent = this.formatTime(this.maxTime);
   }
 
-  // 時刻のフォーマット (hh:mm:ss)
   private formatTime(timestamp: number): string {
     const d = new Date(timestamp);
     const h = d.getHours().toString().padStart(2, '0');

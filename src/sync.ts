@@ -1,4 +1,5 @@
 import { getAllDataForSync, restoreAllDataFromSync } from './data/database';
+import { store } from './app/store';
 
 export class GoogleDriveSyncManager {
   // OAuth2 設定 (Viteの環境変数からロード)
@@ -124,6 +125,9 @@ export class GoogleDriveSyncManager {
       // 4. マージされたデータをローカル IndexedDB に書き戻す
       this.updateStatus('syncing', 'ローカルデータベースに書き込み中...');
       await this.restoreLocalData(mergedData);
+      
+      // ストアをリロードして画面と状態を最新化
+      await store.reloadPages(store.getState().currentPageId);
 
       // 5. 最新のマージデータを Google Drive にアップロード
       this.updateStatus('syncing', 'クラウドへバックアップを送信中...');
@@ -324,6 +328,7 @@ export class GoogleDriveSyncManager {
 
   // 同期ステータス通知
   private updateStatus(status: 'idle' | 'syncing' | 'authenticated' | 'error' | 'offline', msg?: string) {
+    store.setSyncStatus(status, msg);
     if (this.onStatusChanged) {
       this.onStatusChanged(status, msg);
     }

@@ -1,8 +1,6 @@
 import { createIcons, Plus, Search, CloudLightning, Menu, Undo2, Redo2, Sparkles, HelpCircle, Play, Pause, Edit3, Mic, Image, Trash2, X } from 'lucide';
 import { MindMapNode, Position } from './types';
 import * as pageRepo from './data/page-repo';
-import * as nodeRepo from './data/node-repo';
-import * as edgeRepo from './data/edge-repo';
 import * as imageRepo from './data/image-repo';
 import * as eventlogRepo from './data/eventlog-repo';
 import { MindMapCanvas } from './canvas';
@@ -14,6 +12,7 @@ import { MediaManager } from './media';
 import { RadialMenuManager } from './radial-menu';
 import { PlaybackManager } from './playback';
 import { GoogleDriveSyncManager } from './sync';
+import { store } from './app/store';
 
 import { isRootNode, findRootNode } from './domain/graph';
 import { runAutoLayout } from './domain/layout';
@@ -68,108 +67,6 @@ function initIcons() {
   });
 }
 
-// ページ切り替え処理
-async function selectPage(pageId: string) {
-  currentPageId = pageId;
-  const page = await pageRepo.getPage(pageId);
-  if (!page) return;
-
-  // ヘッダータイトル更新
-  currentPageTitleInput.value = page.title;
-  currentPageTitleInput.disabled = false;
-
-  // タイムラインの初期化
-  if (playbackManager) {
-    await playbackManager.initPage(pageId);
-  }
-
-  // データのロードとCanvas描画
-  await loadAndRenderCanvas();
-
-  // Undo/Redoスタックのクリア
-  if (commandStack) {
-    commandStack.clear();
-  }
-
-  // 放射状メニューやインラインテキストエリアは非表示にする
-  if (radialMenuManager) radialMenuManager.hide();
-  removeInlineTextarea();
-  stopSpeechRecognition();
-}
-
-// データの再ロードとCanvasの更新
-async function loadAndRenderCanvas() {
-  if (!currentPageId || !canvasManager) return;
-  const rawNodes = await nodeRepo.getNodesByPage(currentPageId);
-  const edges = await edgeRepo.getEdgesByPage(currentPageId);
-
-  // 画像の Local Blob URL を復元して適用
-  const nodes: MindMapNode[] = [];
-  for (const node of rawNodes) {
-    const clonedNode = { ...node };
-    if (node.media.hasImage && node.media.imageRef) {
-      // IndexedDB 内の Blob からローカル URL を生成
-      const blobUrl = await MediaManager.loadAndCreateImageURL(node.media.imageRef);
-      if (blobUrl) {
-        clonedNode.media = {
-          ...node.media,
-          imageRef: blobUrl
-        };
-      }
-    }
-    nodes.push(clonedNode);
-  }
-
-  canvasManager.setData(nodes, edges);
-}
-
-// タイムラインの範囲時間更新
-async function refreshTimeline() {
-  if (currentPageId && playbackManager) {
-    const isPlaying = playbackManager.getIsPlaying();
-    await playbackManager.initPage(currentPageId);
-    if (isPlaying) {
-      playbackManager.play();
-    }
-  }
-}
-
-// ページ削除時のフォールバック処理
-async function handlePageDeleted(deletedPageId: string) {
-  if (currentPageId === deletedPageId) {
-    const pages = await pageRepo.getAllPages();
-    if (pages.length > 0) {
-      await selectPage(pages[0].pageId);
-      if (sidebarManager) {
-        await sidebarManager.loadPages(pages[0].pageId);
-      }
-    } else {
-      // 全ノート削除時
-      currentPageId = null;
-      currentPageTitleInput.value = '';
-      currentPageTitleInput.disabled = true;
-      if (sidebarManager) {
-        await sidebarManager.loadPages('');
-      }
-      if (canvasManager) {
-        canvasManager.setData([], []);
-      }
-      if (playbackManager) {
-        await playbackManager.initPage(''); // クリア
-      }
-    }
-  } else {
-    if (sidebarManager) {
-      await sidebarManager.loadPages(currentPageId);
-    }
-  }
-}
-
-// ページ新規作成・複製時の処理
-async function handlePageCreated(newPageId: string) {
-  await selectPage(newPageId);
-}
-
 // インラインテキスト編集の開始
 function startInlineEdit(nodeId: string) {
   if (!canvasManager || !currentPageId || canvasManager.isInPlaybackMode()) return;
@@ -207,11 +104,7 @@ function startInlineEdit(nodeId: string) {
     const newText = textarea.value.trim();
     if (newText && newText !== node.text && commandStack) {
       await commandStack.execute(
-        new UpdateNodeTextCommand(nodeId, newText, async () => {
-          await loadAndRenderCanvas();
-          await refreshTimeline();
-          if (sidebarManager) sidebarManager.loadPages(currentPageId);
-        })
+        new UpdateNodeTextCommand(nodeId, newText)
       );
     }
     cleanup();
@@ -274,8 +167,8 @@ function startSpeechRecognition(nodeId: string) {
     return;
   }
 
-  if (!canvasManager || canvasManager['currentPlaybackTime']) return;
-  const node = canvasManager['nodes'].find((n) => n.id === nodeId);
+  if (!canvasManager || canvasManager.isInPlaybackMode()) return;
+  const node = canvasManager.getNodes().find((n) => n.id === nodeId);
   if (!node) return;
 
   const originalText = node.text;
@@ -301,11 +194,7 @@ function startSpeechRecognition(nodeId: string) {
     if (finalVal !== originalText && commandStack) {
       node.text = originalText;
       await commandStack.execute(
-        new UpdateNodeTextCommand(nodeId, finalVal, async () => {
-          await loadAndRenderCanvas();
-          await refreshTimeline();
-          if (sidebarManager) sidebarManager.loadPages(currentPageId);
-        })
+        new UpdateNodeTextCommand(nodeId, finalVal)
       );
     } else {
       node.text = originalText;
@@ -428,7 +317,7 @@ function initUIEvents() {
       payload: { title: newTitle }
     });
 
-    await sidebarManager.loadPages(currentPageId);
+    await store.reloadPages(currentPageId);
   };
 
   currentPageTitleInput.addEventListener('blur', commitPageTitle);
@@ -452,10 +341,7 @@ async function triggerAutoLayout() {
   runAutoLayout(nodesCopy, edges, rootNode, newPositions);
 
   await commandStack.execute(
-    new AlignNodesCommand(currentPageId, newPositions, async () => {
-      await loadAndRenderCanvas();
-      await refreshTimeline();
-    })
+    new AlignNodesCommand(currentPageId, newPositions)
   );
 }
 
@@ -510,10 +396,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   canvasManager.onNodeMoved = async (nodeId, pos) => {
     if (commandStack) {
       await commandStack.execute(
-        new MoveNodeCommand(nodeId, pos, async () => {
-          await loadAndRenderCanvas();
-          await refreshTimeline();
-        })
+        new MoveNodeCommand(nodeId, pos)
       );
     }
   };
@@ -543,10 +426,6 @@ document.addEventListener('DOMContentLoaded', async () => {
           position: newPos
         },
         parentNodeId,
-        async () => {
-          await loadAndRenderCanvas();
-          await refreshTimeline();
-        },
         createdOut
       )
     );
@@ -591,10 +470,6 @@ document.addEventListener('DOMContentLoaded', async () => {
           position: pos
         },
         null,
-        async () => {
-          await loadAndRenderCanvas();
-          await refreshTimeline();
-        },
         createdOut
       )
     );
@@ -630,8 +505,9 @@ document.addEventListener('DOMContentLoaded', async () => {
           id,
           async () => {
             canvasManager?.clearImageCache();
-            await loadAndRenderCanvas();
-            await refreshTimeline();
+            if (currentPageId) {
+              await store.reloadPageData(currentPageId);
+            }
           },
           (err) => {
             alert(`写真の添付に失敗しました: ${err.message || err}`);
@@ -642,11 +518,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (confirm('このノードとすべての子ノードを削除しますか？')) {
           if (commandStack && currentPageId) {
             await commandStack.execute(
-              new DeleteNodeCommand(id, async () => {
-                await loadAndRenderCanvas();
-                await refreshTimeline();
-                if (sidebarManager) sidebarManager.loadPages(currentPageId);
-              })
+              new DeleteNodeCommand(id)
             );
           }
         }
@@ -726,7 +598,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       onAddSibling: async (nodeId) => {
         if (!currentPageId || !commandStack || !canvasManager || canvasManager.isInPlaybackMode()) return;
         
-        const edges = await edgeRepo.getEdgesByPage(currentPageId);
+        const edges = store.getState().edges;
         const parentEdge = edges.find((e) => e.target === nodeId);
         const parentId = parentEdge ? parentEdge.source : null;
 
@@ -758,10 +630,6 @@ document.addEventListener('DOMContentLoaded', async () => {
               position: newPos
             },
             parentId,
-            async () => {
-              await loadAndRenderCanvas();
-              await refreshTimeline();
-            },
             createdOut
           )
         );
@@ -788,11 +656,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (confirm('このノードとすべての子ノードを削除しますか？')) {
           if (commandStack && currentPageId) {
             await commandStack.execute(
-              new DeleteNodeCommand(nodeId, async () => {
-                await loadAndRenderCanvas();
-                await refreshTimeline();
-                if (sidebarManager) sidebarManager.loadPages(currentPageId);
-              })
+              new DeleteNodeCommand(nodeId)
             );
           }
         }
@@ -814,16 +678,53 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // 6. タイムライン再生の初期化
-  playbackManager = new PlaybackManager(canvasManager);
+  playbackManager = new PlaybackManager();
   
-  playbackManager.onTimeChanged = (timeIso) => {
-    const isPast = timeIso !== null;
-    
+  // 7. Google Drive同期マネージャーの初期化
+  syncManager = new GoogleDriveSyncManager();
+
+  // 8. サイドバーマネージャー初期化
+  sidebarManager = new SidebarManager();
+
+  // 9. Store 購読による UI 制御の一本化
+  let lastTimelinePageId: string | null = null;
+  let lastTimelineNodeCount = 0;
+  let lastSyncStatus: string | null = null;
+
+  store.subscribe(async (state) => {
+    // ページタイトル・状態管理の反映
+    if (state.currentPageId !== currentPageId) {
+      const oldPageId = currentPageId;
+      currentPageId = state.currentPageId;
+      
+      if (currentPageId) {
+        const page = state.pages.find(p => p.pageId === currentPageId);
+        if (page) {
+          currentPageTitleInput.value = page.title;
+          currentPageTitleInput.disabled = false;
+        }
+        
+        // ページ切り替え時はスタックをクリアする
+        if (oldPageId !== null && commandStack) {
+          commandStack.clear();
+        }
+      } else {
+        currentPageTitleInput.value = '';
+        currentPageTitleInput.disabled = true;
+      }
+      
+      if (radialMenuManager) radialMenuManager.hide();
+      removeInlineTextarea();
+      stopSpeechRecognition();
+    }
+
+    // タイムライン再生時間に応じた UI 状態制御
+    const isPast = state.playbackTime !== null;
     undoBtn.disabled = isPast || (commandStack ? !commandStack.canUndo() : true);
     redoBtn.disabled = isPast || (commandStack ? !commandStack.canRedo() : true);
     alignBtn.disabled = isPast;
     currentPageTitleInput.disabled = isPast;
-    
+
     const newPageBtn = document.getElementById('new-page-btn') as HTMLButtonElement;
     if (newPageBtn) newPageBtn.disabled = isPast;
 
@@ -832,56 +733,59 @@ document.addEventListener('DOMContentLoaded', async () => {
       radialMenuManager?.hide();
       stopSpeechRecognition();
     }
-  };
 
-  // 7. Google Drive同期マネージャーの初期化
-  syncManager = new GoogleDriveSyncManager();
-
-  syncManager.onStatusChanged = async (status, msg) => {
-    console.log(`Sync status: ${status} (${msg || ''})`);
-    
-    // UI の更新
-    if (syncStatusText && syncBtn) {
-      switch (status) {
-        case 'syncing':
-          syncStatusText.textContent = msg || '同期中...';
-          syncBtn.disabled = true;
-          break;
-        case 'offline':
-          syncStatusText.textContent = 'オフライン (同期不可)';
-          syncBtn.disabled = true;
-          break;
-        case 'authenticated':
-          syncStatusText.textContent = '認証成功 (同期開始)';
-          syncBtn.disabled = true;
-          break;
-        case 'error':
-          syncStatusText.textContent = '同期エラー (再接続)';
-          syncBtn.disabled = false;
-          break;
-        case 'idle':
-        default:
-          syncStatusText.textContent = 'Google Drive 同期';
-          syncBtn.disabled = false;
- 
-          // 同期が成功した場合、メモリ側＆描画を最新データにリフレッシュする
-          if (msg === '同期が成功しました') {
-            const pages = await pageRepo.getAllPages();
-            if (pages.length > 0) {
-              // 現在選択中のページが同期後も残っていればそれを維持、なければ最前面のページを表示
-              const hasCurrent = pages.some((p) => p.pageId === currentPageId);
-              const targetPageId = hasCurrent ? currentPageId! : pages[0].pageId;
-              
-              if (sidebarManager) {
-                await sidebarManager.loadPages(targetPageId);
-              }
-              await selectPage(targetPageId);
-            }
-          }
-          break;
+    // タイムラインの初期化・更新
+    if (state.currentPageId && (state.currentPageId !== lastTimelinePageId || state.nodes.length !== lastTimelineNodeCount)) {
+      lastTimelinePageId = state.currentPageId;
+      lastTimelineNodeCount = state.nodes.length;
+      if (playbackManager) {
+        const isPlaying = playbackManager.getIsPlaying();
+        await playbackManager.initPage(state.currentPageId);
+        if (isPlaying) {
+          playbackManager.play();
+        }
+      }
+    } else if (!state.currentPageId && lastTimelinePageId !== null) {
+      lastTimelinePageId = null;
+      lastTimelineNodeCount = 0;
+      if (playbackManager) {
+        await playbackManager.initPage('');
       }
     }
-  };
+
+    // 同期状態の UI 反映
+    const { status, msg } = state.syncStatus;
+    if (status !== lastSyncStatus) {
+      lastSyncStatus = status;
+      console.log(`Sync status in UI: ${status} (${msg || ''})`);
+
+      if (syncStatusText && syncBtn) {
+        switch (status) {
+          case 'syncing':
+            syncStatusText.textContent = msg || '同期中...';
+            syncBtn.disabled = true;
+            break;
+          case 'offline':
+            syncStatusText.textContent = 'オフライン (同期不可)';
+            syncBtn.disabled = true;
+            break;
+          case 'authenticated':
+            syncStatusText.textContent = '認証成功 (同期開始)';
+            syncBtn.disabled = true;
+            break;
+          case 'error':
+            syncStatusText.textContent = '同期エラー (再接続)';
+            syncBtn.disabled = false;
+            break;
+          case 'idle':
+          default:
+            syncStatusText.textContent = 'Google Drive 同期';
+            syncBtn.disabled = false;
+            break;
+        }
+      }
+    }
+  });
 
   // 同期ボタンクリックイベント
   syncBtn.addEventListener('click', () => {
@@ -894,7 +798,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // 同期マネージャーの初期化を実行 (アプリ起動をブロックしないよう非同期で実行)
+  // 同期マネージャーの初期化を実行
   console.log('Initializing sync manager...');
   syncManager.initialize().then((success) => {
     console.log('Sync manager initialization finished. Success:', success);
@@ -902,33 +806,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.error('Sync manager initialization failed with error:', err);
   });
 
-  // 8. サイドバーマネージャー初期化
-  console.log('Initializing sidebar manager...');
-  sidebarManager = new SidebarManager(
-    selectPage,
-    handlePageDeleted,
-    handlePageCreated
-  );
-
-  // 初回ページロード
-  const pages = await pageRepo.getAllPages();
-  if (pages.length > 0) {
-    await selectPage(pages[0].pageId);
-    await sidebarManager.loadPages(pages[0].pageId);
-  } else {
-    const newPage = await pageRepo.createPage('ようこそノート');
-    await nodeRepo.createNode({
-      pageId: newPage.pageId,
-      text: '中心テーマ',
-      media: {
-        hasImage: false,
-        imageRef: '',
-        hasAudio: false,
-        audioRef: ''
-      },
-      position: { x: 0, y: 0 }
-    });
-    await selectPage(newPage.pageId);
-    await sidebarManager.loadPages(newPage.pageId);
-  }
+  // アプリケーションとストアの初期化を実行
+  console.log('Initializing AppStore...');
+  await store.initialize();
 });

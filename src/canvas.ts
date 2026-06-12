@@ -1,4 +1,5 @@
 import { MindMapNode, Edge, Position } from './types';
+import { store } from './app/store';
 
 export class MindMapCanvas {
   private canvas: HTMLCanvasElement;
@@ -68,22 +69,19 @@ export class MindMapCanvas {
 
     this.initEvents();
     this.startRenderLoop();
+
+    // AppStore の購読
+    store.subscribe((state) => {
+      this.nodes = state.nodes as MindMapNode[];
+      this.edges = state.edges as Edge[];
+      this.currentPlaybackTime = state.playbackTime;
+      this.selectedNodeId = state.selectedNodeId;
+      this.applyTimeFilter();
+      this.requestRender();
+    });
   }
 
-  // データの更新
-  public setData(nodes: MindMapNode[], edges: Edge[]) {
-    this.nodes = nodes;
-    this.edges = edges;
-    this.applyTimeFilter();
-    this.requestRender();
-  }
 
-  // タイムライン時間フィルターの適用
-  public setPlaybackTime(time: string | null) {
-    this.currentPlaybackTime = time;
-    this.applyTimeFilter();
-    this.requestRender();
-  }
 
   // 現在のスケール取得
   public getScale(): number {
@@ -256,11 +254,7 @@ export class MindMapCanvas {
   }
 
   public setSelectedNodeId(nodeId: string | null) {
-    this.selectedNodeId = nodeId;
-    this.requestRender();
-    if (this.onNodeSelected) {
-      this.onNodeSelected(nodeId);
-    }
+    store.setSelectedNodeId(nodeId);
   }
 
   // ビューポートをリサイズ
