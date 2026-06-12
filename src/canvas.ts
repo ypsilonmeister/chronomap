@@ -90,6 +90,96 @@ export class MindMapCanvas {
     return this.scale;
   }
 
+  public getNodes(): readonly MindMapNode[] {
+    return this.nodes;
+  }
+
+  public getEdges(): readonly Edge[] {
+    return this.edges;
+  }
+
+  public getCanvasElement(): HTMLCanvasElement {
+    return this.canvas;
+  }
+
+  public getOffsetX(): number {
+    return this.offsetX;
+  }
+
+  public getOffsetY(): number {
+    return this.offsetY;
+  }
+
+  public getCurrentPlaybackTime(): string | null {
+    return this.currentPlaybackTime;
+  }
+
+  public isInPlaybackMode(): boolean {
+    return this.currentPlaybackTime !== null;
+  }
+
+  public getNodeScreenBounds(nodeId: string): { left: number; top: number; width: number; height: number } | null {
+    const node = this.nodes.find((n) => n.id === nodeId);
+    if (!node) return null;
+
+    const size = this.calculateNodeSize(node);
+    const rect = this.canvas.getBoundingClientRect();
+    const halfW = rect.width / 2;
+    const halfH = rect.height / 2;
+
+    const screenX = (node.position.x * this.scale) + halfW + this.offsetX;
+    const screenY = (node.position.y * this.scale) + halfH + this.offsetY;
+    const screenW = size.width * this.scale;
+    const screenH = size.height * this.scale;
+
+    return {
+      left: rect.left + screenX - screenW / 2,
+      top: rect.top + screenY - screenH / 2,
+      width: screenW,
+      height: screenH
+    };
+  }
+
+  public isPositionOnPlusButton(nodeId: string, worldPos: Position): boolean {
+    const node = this.nodes.find((n) => n.id === nodeId);
+    if (!node || this.currentPlaybackTime) return false;
+
+    const size = this.calculateNodeSize(node);
+    const btnX = node.position.x + size.width / 2 + this.PLUS_BTN_OFFSET_X;
+    const btnY = node.position.y;
+    
+    const dist = Math.hypot(worldPos.x - btnX, worldPos.y - btnY);
+    return dist <= this.PLUS_BTN_RADIUS;
+  }
+
+  public isPositionOnNodeImage(nodeId: string, worldPos: Position): boolean {
+    const node = this.nodes.find((n) => n.id === nodeId);
+    if (!node || !node.media.hasImage || !node.media.imageRef) return false;
+
+    const size = this.calculateNodeSize(node);
+    const rx = node.position.x - size.width / 2;
+    const ry = node.position.y - size.height / 2;
+
+    const img = this.imageCache.get(node.media.imageRef);
+    if (img && img.complete) {
+      const imgWidth = size.width - this.NODE_PADDING_X * 2;
+      const imgHeight = (img.height / img.width) * imgWidth;
+
+      const imgXMin = rx + this.NODE_PADDING_X;
+      const imgXMax = rx + this.NODE_PADDING_X + imgWidth;
+      const imgYMin = ry + this.NODE_PADDING_Y;
+      const imgYMax = ry + this.NODE_PADDING_Y + imgHeight;
+
+      return (
+        worldPos.x >= imgXMin &&
+        worldPos.x <= imgXMax &&
+        worldPos.y >= imgYMin &&
+        worldPos.y <= imgYMax
+      );
+    }
+    return false;
+  }
+
   // スケールリセット
   public resetZoom() {
     this.scale = 1;
@@ -595,7 +685,7 @@ export class MindMapCanvas {
   }
 
   // スクリーン座標 -> ワールド座標への逆変換
-  private screenToWorld(x: number, y: number): Position {
+  public screenToWorld(x: number, y: number): Position {
     const rect = this.canvas.getBoundingClientRect();
     const halfW = rect.width / 2;
     const halfH = rect.height / 2;
@@ -969,7 +1059,7 @@ export class MindMapCanvas {
   // ==========================================
 
   // 指定座標にあるノードを探索
-  private findNodeAt(worldPos: Position): MindMapNode | null {
+  public findNodeAt(worldPos: Position): MindMapNode | null {
     // 逆順（後から描画されたものが前面にくるため）で探索
     for (let i = this.filteredNodes.length - 1; i >= 0; i--) {
       const node = this.filteredNodes[i];

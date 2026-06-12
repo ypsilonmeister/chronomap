@@ -1,4 +1,5 @@
-import * as db from './db';
+import * as nodeRepo from './data/node-repo';
+import * as edgeRepo from './data/edge-repo';
 import { MindMapCanvas } from './canvas';
 import { createIcons, Play, Pause } from 'lucide';
 
@@ -11,15 +12,15 @@ export class PlaybackManager {
   private currentTimeText: HTMLSpanElement;
   private maxTimeText: HTMLSpanElement;
   private speedSelect: HTMLSelectElement;
+  private targetDurationSeconds = 30;
+  private lastFrameTime = 0;
+  private animationFrameId: number | null = null;
 
   // 状態
   private minTime = 0;
   private maxTime = 0;
   private currentTime = 0;
   private isPlaying = false;
-  private targetDurationSeconds = 30;
-  private lastFrameTime = 0;
-  private animationFrameId: number | null = null;
 
   // コールバック
   public onTimeChanged: ((timeIso: string | null) => void) | null = null;
@@ -37,12 +38,16 @@ export class PlaybackManager {
     this.initEvents();
   }
 
+  public getIsPlaying(): boolean {
+    return this.isPlaying;
+  }
+
   // 対象ページの初期化
   public async initPage(pageId: string) {
     this.stop();
 
-    const nodes = await db.getNodesByPage(pageId);
-    const edges = await db.getEdgesByPage(pageId);
+    const nodes = await nodeRepo.getNodesByPage(pageId);
+    const edges = await edgeRepo.getEdgesByPage(pageId);
 
     if (nodes.length === 0) {
       // ノードがない場合は無効化

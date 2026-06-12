@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
     "idb": "^8.0.1",
@@ -16,6 +17,7 @@
     "typescript": "^5.4.5",
     "vite": "^5.2.11",
     "vite-plugin-pwa": "^0.20.0",
+    "vitest": "^4.1.8",
     "workbox-window": "^7.1.0"
   }
 }

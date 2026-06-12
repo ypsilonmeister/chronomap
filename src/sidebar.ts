@@ -1,5 +1,6 @@
-import { Page, MindMapNode } from './types';
-import * as db from './db';
+import { Page } from './types';
+import * as pageRepo from './data/page-repo';
+import * as nodeRepo from './data/node-repo';
 import { createIcons, Trash2, Copy } from 'lucide';
 
 export class SidebarManager {
@@ -10,7 +11,7 @@ export class SidebarManager {
   private sortSelect: HTMLSelectElement;
 
   // 状態
-  private pages: Page[] = [];
+  private summaries: Array<{ page: Page; nodeCount: number; nodeTexts: string[] }> = [];
   private currentPageId: string | null = null;
   private searchQuery = '';
   private sortKey = 'updatedAt_desc';
@@ -40,7 +41,7 @@ export class SidebarManager {
 
   // 初期ロード
   public async loadPages(selectedPageId: string | null = null) {
-    this.pages = await db.getAllPages();
+    this.summaries = await pageRepo.getPageSummaries();
     this.currentPageId = selectedPageId;
     await this.render();
   }
@@ -50,10 +51,10 @@ export class SidebarManager {
     this.pageListEl.innerHTML = '';
     
     // ソートの適用
-    const sortedPages = this.getSortedPages();
+    const sortedSummaries = this.getSortedSummaries();
 
     // 検索の適用（フィルタリングと検索スニペットの準備）
-    const searchFiltered = await this.filterPagesBySearch(sortedPages);
+    const searchFiltered = this.filterSummariesBySearch(sortedSummaries);
 
     if (searchFiltered.length === 0) {
       const emptyLi = document.createElement('li');
@@ -65,7 +66,7 @@ export class SidebarManager {
       return;
     }
 
-    for (const { page, snippet } of searchFiltered) {
+    for (const { page, nodeCount, snippet } of searchFiltered) {
       const isSelected = page.pageId === this.currentPageId;
 
       const li = document.createElement('li');
@@ -78,10 +79,6 @@ export class SidebarManager {
         month: '2-digit',
         day: '2-digit'
       });
-
-      // ノード数の取得
-      const nodes = await db.getNodesByPage(page.pageId);
-      const nodeCount = nodes.length;
 
       li.innerHTML = `
         <div class="page-item-title" title="${this.escapeHtml(page.title)}">${this.escapeHtml(page.title)}</div>
@@ -111,7 +108,6 @@ export class SidebarManager {
       // アイテムクリックで選択
       li.addEventListener('click', (e) => {
         const target = e.target as HTMLElement;
-        // アクションボタンのクリック時はページ選択処理をスキップ
         if (target.closest('.btn-action-delete') || target.closest('.btn-action-clone')) {
           return;
         }
@@ -124,7 +120,7 @@ export class SidebarManager {
       cloneBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         try {
-          const cloned = await db.clonePage(page.pageId);
+          const cloned = await pageRepo.clonePage(page.pageId);
           await this.loadPages(cloned.pageId);
           this.onPageCreated(cloned.pageId);
         } catch (err) {
@@ -138,7 +134,7 @@ export class SidebarManager {
         e.stopPropagation();
         if (confirm(`ノート「${page.title}」を削除しますか？\n配下のエッジ、音声、写真データもすべて消去されます。`)) {
           try {
-            await db.deletePage(page.pageId);
+            await pageRepo.deletePage(page.pageId);
             this.onPageDeleted(page.pageId);
           } catch (err) {
             console.error('Failed to delete page:', err);
@@ -163,7 +159,6 @@ export class SidebarManager {
     if (this.currentPageId === pageId) return;
     this.currentPageId = pageId;
     
-    // UIのactiveクラス更新
     const items = this.pageListEl.querySelectorAll('.page-item');
     items.forEach((item) => {
       const el = item as HTMLElement;
@@ -182,9 +177,9 @@ export class SidebarManager {
     // 新規作成ボタン
     this.newPageBtn.addEventListener('click', async () => {
       try {
-        const newPage = await db.createPage('無題のノート');
+        const newPage = await pageRepo.createPage('無題のノート');
         // 中心ルートノードを作成する
-        await db.createNode({
+        await nodeRepo.createNode({
           pageId: newPage.pageId,
           text: '中心テーマ',
           media: {
@@ -221,54 +216,52 @@ export class SidebarManager {
   }
 
   // ソート処理
-  private getSortedPages(): Page[] {
-    const list = [...this.pages];
+  private getSortedSummaries(): Array<{ page: Page; nodeCount: number; nodeTexts: string[] }> {
+    const list = [...this.summaries];
     switch (this.sortKey) {
       case 'createdAt_desc':
-        return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        return list.sort((a, b) => new Date(b.page.createdAt).getTime() - new Date(a.page.createdAt).getTime());
       case 'title_asc':
-        return list.sort((a, b) => a.title.localeCompare(b.title, 'ja'));
+        return list.sort((a, b) => a.page.title.localeCompare(b.page.title, 'ja'));
       case 'updatedAt_desc':
       default:
-        return list.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        return list.sort((a, b) => new Date(b.page.updatedAt).getTime() - new Date(a.page.updatedAt).getTime());
     }
   }
 
   // 検索フィルタリング
-  private async filterPagesBySearch(sortedList: Page[]): Promise<Array<{ page: Page; snippet: string }>> {
+  private filterSummariesBySearch(
+    sortedList: Array<{ page: Page; nodeCount: number; nodeTexts: string[] }>
+  ): Array<{ page: Page; nodeCount: number; snippet: string }> {
     if (!this.searchQuery) {
-      return sortedList.map((page) => ({ page, snippet: '' }));
+      return sortedList.map((item) => ({ page: item.page, nodeCount: item.nodeCount, snippet: '' }));
     }
 
-    const filtered: Array<{ page: Page; snippet: string }> = [];
+    const filtered: Array<{ page: Page; nodeCount: number; snippet: string }> = [];
 
-    for (const page of sortedList) {
+    for (const item of sortedList) {
       // 1. ページタイトルマッチ
-      if (page.title.toLowerCase().includes(this.searchQuery)) {
-        filtered.push({ page, snippet: '' });
+      if (item.page.title.toLowerCase().includes(this.searchQuery)) {
+        filtered.push({ page: item.page, nodeCount: item.nodeCount, snippet: '' });
         continue;
       }
 
       // 2. ページ内の全ノードテキストマッチ
-      const nodes = await db.getNodesByPage(page.pageId);
-      let matchedNode: MindMapNode | null = null;
-      
-      for (const node of nodes) {
-        if (node.text.toLowerCase().includes(this.searchQuery)) {
-          matchedNode = node;
+      let matchedText: string | null = null;
+      for (const text of item.nodeTexts) {
+        if (text.toLowerCase().includes(this.searchQuery)) {
+          matchedText = text;
           break;
         }
       }
 
-      if (matchedNode) {
-        // スニペットを生成 (前後15文字程度を切り出す)
-        const text = matchedNode.text;
-        const idx = text.toLowerCase().indexOf(this.searchQuery);
+      if (matchedText) {
+        const idx = matchedText.toLowerCase().indexOf(this.searchQuery);
         const start = Math.max(0, idx - 10);
-        const end = Math.min(text.length, idx + this.searchQuery.length + 10);
-        const snippet = text.substring(start, end);
+        const end = Math.min(matchedText.length, idx + this.searchQuery.length + 10);
+        const snippet = matchedText.substring(start, end);
         
-        filtered.push({ page, snippet });
+        filtered.push({ page: item.page, nodeCount: item.nodeCount, snippet });
       }
     }
 

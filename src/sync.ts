@@ -1,4 +1,4 @@
-import * as db from './db';
+import { getAllDataForSync, restoreAllDataFromSync } from './data/database';
 
 export class GoogleDriveSyncManager {
   // OAuth2 設定 (Viteの環境変数からロード)
@@ -210,95 +210,12 @@ export class GoogleDriveSyncManager {
 
   // ローカルデータを収集し、画像を Base64 化したオブジェクトを生成
   private async collectLocalData() {
-    const database = await db.getDB();
-    
-    // 歴史エントリーのマイグレーション: entryIdがない場合に付与して保存
-    const rawHistories = await database.getAll('history');
-    const tx = database.transaction('history', 'readwrite');
-    const historyStore = tx.objectStore('history');
-    let migrated = false;
-    for (const h of rawHistories) {
-      if (!h.entryId) {
-        h.entryId = db.generateUUID();
-        await historyStore.put(h);
-        migrated = true;
-      }
-    }
-    if (migrated) {
-      await tx.done;
-    } else {
-      await tx.abort();
-    }
-
-    // マイグレーション後の最新データを取得
-    const pages = await database.getAll('pages');
-    const nodes = await database.getAll('nodes');
-    const edges = await database.getAll('edges');
-    const histories = await database.getAll('history');
-    
-    // 画像ストアから画像 Blob を読み取って Base64 にエンコード
-    const rawImages = await database.getAll('images');
-    const images: Array<{ id: string; data: string }> = [];
-
-    for (const img of rawImages) {
-      if (img.blob) {
-        const base64 = await this.blobToBase64(img.blob);
-        images.push({ id: img.id, data: base64 });
-      }
-    }
-
-    return { pages, nodes, edges, history: histories, images };
+    return getAllDataForSync();
   }
 
   // ローカル IndexedDB にマージ後データを書き込む
   private async restoreLocalData(data: any) {
-    const database = await db.getDB();
-    
-    // トランザクションを開始して一括書き込み
-    const tx = database.transaction(['pages', 'nodes', 'edges', 'history', 'images'], 'readwrite');
-    
-    // pages ストアの更新
-    const pageStore = tx.objectStore('pages');
-    await pageStore.clear();
-    for (const p of data.pages) {
-      await pageStore.put(p);
-    }
-
-    // nodes ストアの更新 (画像の一時BlobURLは同期対象外なので、後ほど画像ロード時に再生成されるよう imageRef を img-nodeId に戻しておく)
-    const nodeStore = tx.objectStore('nodes');
-    await nodeStore.clear();
-    for (const n of data.nodes) {
-      const nodeToPut = { ...n };
-      // 画像アタッチがある場合、同期データ内の一時BlobURL(blob:http...)は破棄し、IndexedDB参照キー(img-nodeId)に戻す
-      if (nodeToPut.media.hasImage && !nodeToPut.media.imageRef.startsWith('img-')) {
-        nodeToPut.media.imageRef = `img-${n.id}`;
-      }
-      await nodeStore.put(nodeToPut);
-    }
-
-    // edges ストアの更新
-    const edgeStore = tx.objectStore('edges');
-    await edgeStore.clear();
-    for (const e of data.edges) {
-      await edgeStore.put(e);
-    }
-
-    // history ストアの更新
-    const historyStore = tx.objectStore('history');
-    await historyStore.clear();
-    for (const h of data.history) {
-      await historyStore.put(h);
-    }
-
-    // images ストアの更新 (Base64 から Blob にデコード)
-    const imageStore = tx.objectStore('images');
-    await imageStore.clear();
-    for (const img of data.images) {
-      const blob = this.base64ToBlob(img.data);
-      await imageStore.put({ id: img.id, blob });
-    }
-
-    await tx.done;
+    await restoreAllDataFromSync(data);
   }
 
   // 競合解消マージ処理 (updatedAt が新しい方を採用)
@@ -386,30 +303,7 @@ export class GoogleDriveSyncManager {
   // ユーティリティ
   // ==========================================
 
-  // Blob を Base64 文字列に変換
-  private blobToBase64(blob: Blob): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const dataUrl = reader.result as string;
-        const base64 = dataUrl.split(',')[1];
-        resolve(base64);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
 
-  // Base64 文字列を Blob にデコード
-  private base64ToBlob(base64: string, mimeType = 'image/jpeg'): Blob {
-    const byteCharacters = atob(base64);
-    const byteNumbers = new Array(byteCharacters.length);
-    for (let i = 0; i < byteCharacters.length; i++) {
-      byteNumbers[i] = byteCharacters.charCodeAt(i);
-    }
-    const byteArray = new Uint8Array(byteNumbers);
-    return new Blob([byteArray], { type: mimeType });
-  }
 
   // 動的スクリプト読み込み
   private loadScript(src: string): Promise<void> {

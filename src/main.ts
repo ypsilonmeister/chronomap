@@ -1,6 +1,10 @@
 import { createIcons, Plus, Search, CloudLightning, Menu, Undo2, Redo2, Sparkles, HelpCircle, Play, Pause, Edit3, Mic, Image, Trash2, X } from 'lucide';
-import { MindMapNode, Edge, Position } from './types';
-import * as db from './db';
+import { MindMapNode, Position } from './types';
+import * as pageRepo from './data/page-repo';
+import * as nodeRepo from './data/node-repo';
+import * as edgeRepo from './data/edge-repo';
+import * as imageRepo from './data/image-repo';
+import * as eventlogRepo from './data/eventlog-repo';
 import { MindMapCanvas } from './canvas';
 import { CommandStack, AddNodeCommand, MoveNodeCommand, UpdateNodeTextCommand, DeleteNodeCommand, AlignNodesCommand } from './history';
 import { ShortcutManager } from './shortcuts';
@@ -11,6 +15,10 @@ import { RadialMenuManager } from './radial-menu';
 import { PlaybackManager } from './playback';
 import { GoogleDriveSyncManager } from './sync';
 
+import { isRootNode, findRootNode } from './domain/graph';
+import { runAutoLayout } from './domain/layout';
+import { calculateChildNodePosition, calculateSiblingNodePosition } from './domain/node-placement';
+
 // グローバル状態
 let currentPageId: string | null = null;
 let canvasManager: MindMapCanvas | null = null;
@@ -18,11 +26,11 @@ let commandStack: CommandStack | null = null;
 let shortcutManager: ShortcutManager | null = null;
 let sidebarManager: SidebarManager | null = null;
 let radialMenuManager: RadialMenuManager | null = null;
-let speechRecognizer: AudioSpeechRecognizer | null = null;
 let playbackManager: PlaybackManager | null = null;
 let syncManager: GoogleDriveSyncManager | null = null;
 let activeEditNodeId: string | null = null;
 let activeTextarea: HTMLTextAreaElement | null = null;
+let speechRecognizer: AudioSpeechRecognizer | null = null;
 
 // DOM 要素キャッシュ
 let undoBtn: HTMLButtonElement;
@@ -32,7 +40,7 @@ let currentPageTitleInput: HTMLInputElement;
 let zoomLevelSpan: HTMLSpanElement;
 let zoomFitBtn: HTMLButtonElement;
 let zoomResetBtn: HTMLButtonElement;
-let recordingToast: HTMLElement;
+let recordingToast: HTMLDivElement;
 let stopRecordingBtn: HTMLButtonElement;
 let syncBtn: HTMLButtonElement;
 let syncStatusText: HTMLSpanElement;
@@ -63,7 +71,7 @@ function initIcons() {
 // ページ切り替え処理
 async function selectPage(pageId: string) {
   currentPageId = pageId;
-  const page = await db.getPage(pageId);
+  const page = await pageRepo.getPage(pageId);
   if (!page) return;
 
   // ヘッダータイトル更新
@@ -92,8 +100,8 @@ async function selectPage(pageId: string) {
 // データの再ロードとCanvasの更新
 async function loadAndRenderCanvas() {
   if (!currentPageId || !canvasManager) return;
-  const rawNodes = await db.getNodesByPage(currentPageId);
-  const edges = await db.getEdgesByPage(currentPageId);
+  const rawNodes = await nodeRepo.getNodesByPage(currentPageId);
+  const edges = await edgeRepo.getEdgesByPage(currentPageId);
 
   // 画像の Local Blob URL を復元して適用
   const nodes: MindMapNode[] = [];
@@ -118,7 +126,7 @@ async function loadAndRenderCanvas() {
 // タイムラインの範囲時間更新
 async function refreshTimeline() {
   if (currentPageId && playbackManager) {
-    const isPlaying = playbackManager['isPlaying'];
+    const isPlaying = playbackManager.getIsPlaying();
     await playbackManager.initPage(currentPageId);
     if (isPlaying) {
       playbackManager.play();
@@ -129,7 +137,7 @@ async function refreshTimeline() {
 // ページ削除時のフォールバック処理
 async function handlePageDeleted(deletedPageId: string) {
   if (currentPageId === deletedPageId) {
-    const pages = await db.getAllPages();
+    const pages = await pageRepo.getAllPages();
     if (pages.length > 0) {
       await selectPage(pages[0].pageId);
       if (sidebarManager) {
@@ -138,13 +146,13 @@ async function handlePageDeleted(deletedPageId: string) {
     } else {
       // 全ノート削除時
       currentPageId = null;
-      currentPageTitleInput.value = 'ノートがありません';
+      currentPageTitleInput.value = '';
       currentPageTitleInput.disabled = true;
+      if (sidebarManager) {
+        await sidebarManager.loadPages('');
+      }
       if (canvasManager) {
         canvasManager.setData([], []);
-      }
-      if (sidebarManager) {
-        await sidebarManager.loadPages(null);
       }
       if (playbackManager) {
         await playbackManager.initPage(''); // クリア
@@ -164,33 +172,25 @@ async function handlePageCreated(newPageId: string) {
 
 // インラインテキスト編集の開始
 function startInlineEdit(nodeId: string) {
-  if (!canvasManager || !currentPageId || canvasManager['currentPlaybackTime']) return;
+  if (!canvasManager || !currentPageId || canvasManager.isInPlaybackMode()) return;
 
   // 既存のインラインテキストエリアがあれば削除
   removeInlineTextarea();
 
-  const node = canvasManager['nodes'].find((n) => n.id === nodeId);
+  const node = canvasManager.getNodes().find((n) => n.id === nodeId);
   if (!node) return;
 
-  const size = canvasManager['calculateNodeSize'](node);
-  
-  const rect = canvasManager['canvas'].getBoundingClientRect();
-  const halfW = rect.width / 2;
-  const halfH = rect.height / 2;
-  
-  const screenX = (node.position.x * canvasManager['scale']) + halfW + canvasManager['offsetX'];
-  const screenY = (node.position.y * canvasManager['scale']) + halfH + canvasManager['offsetY'];
-  const screenW = size.width * canvasManager['scale'];
-  const screenH = size.height * canvasManager['scale'];
+  const bounds = canvasManager.getNodeScreenBounds(nodeId);
+  if (!bounds) return;
 
   const textarea = document.createElement('textarea');
   textarea.className = 'canvas-textarea';
   textarea.value = node.text;
   
-  textarea.style.left = `${rect.left + screenX - screenW / 2}px`;
-  textarea.style.top = `${rect.top + screenY - screenH / 2}px`;
-  textarea.style.width = `${screenW}px`;
-  textarea.style.height = `${screenH}px`;
+  textarea.style.left = `${bounds.left}px`;
+  textarea.style.top = `${bounds.top}px`;
+  textarea.style.width = `${bounds.width}px`;
+  textarea.style.height = `${bounds.height}px`;
   
   document.body.appendChild(textarea);
   textarea.focus();
@@ -258,23 +258,13 @@ function removeInlineTextarea() {
 
 function updateTextareaPosition() {
   if (!activeEditNodeId || !activeTextarea || !canvasManager) return;
-  const node = canvasManager['nodes'].find((n) => n.id === activeEditNodeId);
-  if (!node) return;
+  const bounds = canvasManager.getNodeScreenBounds(activeEditNodeId);
+  if (!bounds) return;
 
-  const size = canvasManager['calculateNodeSize'](node);
-  const rect = canvasManager['canvas'].getBoundingClientRect();
-  const halfW = rect.width / 2;
-  const halfH = rect.height / 2;
-  
-  const screenX = (node.position.x * canvasManager['scale']) + halfW + canvasManager['offsetX'];
-  const screenY = (node.position.y * canvasManager['scale']) + halfH + canvasManager['offsetY'];
-  const screenW = size.width * canvasManager['scale'];
-  const screenH = size.height * canvasManager['scale'];
-
-  activeTextarea.style.left = `${rect.left + screenX - screenW / 2}px`;
-  activeTextarea.style.top = `${rect.top + screenY - screenH / 2}px`;
-  activeTextarea.style.width = `${screenW}px`;
-  activeTextarea.style.height = `${screenH}px`;
+  activeTextarea.style.left = `${bounds.left}px`;
+  activeTextarea.style.top = `${bounds.top}px`;
+  activeTextarea.style.width = `${bounds.width}px`;
+  activeTextarea.style.height = `${bounds.height}px`;
 }
 
 // 音声入力のハンドリング
@@ -429,9 +419,9 @@ function initUIEvents() {
     const newTitle = currentPageTitleInput.value.trim() || '無題のノート';
     currentPageTitleInput.value = newTitle;
     
-    await db.updatePage(currentPageId, { title: newTitle });
+    await pageRepo.updatePage(currentPageId, { title: newTitle });
     
-    await db.addHistory({
+    await eventlogRepo.addHistory({
       pageId: currentPageId,
       timestamp: new Date().toISOString(),
       action: 'update_page_title',
@@ -449,120 +439,12 @@ function initUIEvents() {
   });
 }
 
-// 自動整列の座標計算アルゴリズム (放射状マインドマップレイアウト)
-function runAutoLayout(
-  nodes: MindMapNode[],
-  edges: Edge[],
-  rootNode: MindMapNode,
-  outPositions: Map<string, Position>
-) {
-  const getChildren = (nodeId: string) => {
-    return nodes.filter((n) => edges.some((e) => e.source === nodeId && e.target === n.id));
-  };
-
-  // 各ノードのサブツリーに含まれる全ノード数（重み、最小1）を計算
-  const subtreeWeights = new Map<string, number>();
-  const calculateWeights = (nodeId: string): number => {
-    const nodeChildren = getChildren(nodeId);
-    if (nodeChildren.length === 0) {
-      subtreeWeights.set(nodeId, 1);
-      return 1;
-    }
-    let weight = 0;
-    for (const child of nodeChildren) {
-      weight += calculateWeights(child.id);
-    }
-    subtreeWeights.set(nodeId, weight);
-    return weight;
-  };
-
-  calculateWeights(rootNode.id);
-
-  // ルートノードを中央に配置
-  outPositions.set(rootNode.id, { x: 0, y: 0 });
-
-  const children = getChildren(rootNode.id);
-  if (children.length === 0) return;
-
-  const radiusStep = 240; // 階層ごとの距離
-
-  // 再帰的に放射状に子ノードを配置する関数
-  const layoutSubtree = (
-    nodeId: string,
-    parentX: number,
-    parentY: number,
-    startAngle: number,
-    endAngle: number
-  ) => {
-    const nodeChildren = getChildren(nodeId);
-    if (nodeChildren.length === 0) return;
-
-    let childrenWeightSum = 0;
-    for (const child of nodeChildren) {
-      childrenWeightSum += subtreeWeights.get(child.id) || 1;
-    }
-
-    const parentAngleSpan = endAngle - startAngle;
-    let currentAngle = startAngle;
-
-    for (const child of nodeChildren) {
-      const childWeight = subtreeWeights.get(child.id) || 1;
-      const angleSpan = parentAngleSpan * (childWeight / childrenWeightSum);
-      
-      const angle = currentAngle + angleSpan / 2;
-      const dist = 200; // 孫以降の距離はやや短めに
-
-      const childX = parentX + dist * Math.cos(angle);
-      const childY = parentY + dist * Math.sin(angle);
-
-      outPositions.set(child.id, { x: childX, y: childY });
-
-      // 親ノードの進行方向 angle を中心とした扇形に子ノードを広げる
-      const maxSpan = Math.PI / 1.5; // 最大120度
-      const childSpan = Math.min(angleSpan, maxSpan);
-      const childStart = angle - childSpan / 2;
-      const childEnd = angle + childSpan / 2;
-
-      layoutSubtree(child.id, childX, childY, childStart, childEnd);
-
-      currentAngle += angleSpan;
-    }
-  };
-
-  // ルートノードの直接の子ノードたちを 360 度に均等（または重みに応じて）配置
-  let currentAngle = 0;
-  let rootChildrenWeightSum = 0;
-  for (const c of children) {
-    rootChildrenWeightSum += subtreeWeights.get(c.id) || 1;
-  }
-
-  for (const child of children) {
-    const childWeight = subtreeWeights.get(child.id) || 1;
-    const angleSpan = (2 * Math.PI) * (childWeight / rootChildrenWeightSum);
-    const angle = currentAngle + angleSpan / 2;
-
-    const childX = 0 + radiusStep * Math.cos(angle);
-    const childY = 0 + radiusStep * Math.sin(angle);
-
-    outPositions.set(child.id, { x: childX, y: childY });
-
-    // 孫ノード以降の配置
-    const maxSpan = children.length === 1 ? Math.PI : Math.min(angleSpan, Math.PI / 1.5);
-    const childStart = angle - maxSpan / 2;
-    const childEnd = angle + maxSpan / 2;
-
-    layoutSubtree(child.id, childX, childY, childStart, childEnd);
-
-    currentAngle += angleSpan;
-  }
-}
-
 async function triggerAutoLayout() {
-  if (!currentPageId || !canvasManager || !commandStack || canvasManager['currentPlaybackTime']) return;
+  if (!currentPageId || !canvasManager || !commandStack || canvasManager.isInPlaybackMode()) return;
 
-  const nodes = canvasManager['nodes'];
-  const edges = canvasManager['edges'];
-  const rootNode = nodes.find((node) => !edges.some((edge) => edge.target === node.id));
+  const nodes = [...canvasManager.getNodes()];
+  const edges = [...canvasManager.getEdges()];
+  const rootNode = findRootNode(nodes, edges);
   if (!rootNode) return;
 
   const newPositions = new Map<string, Position>();
@@ -587,7 +469,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   zoomLevelSpan = document.getElementById('zoom-level') as HTMLSpanElement;
   zoomFitBtn = document.getElementById('zoom-fit-btn') as HTMLButtonElement;
   zoomResetBtn = document.getElementById('zoom-reset-btn') as HTMLButtonElement;
-  recordingToast = document.getElementById('recording-toast') as HTMLElement;
+  recordingToast = document.getElementById('recording-toast') as HTMLDivElement;
   stopRecordingBtn = document.getElementById('stop-recording-btn') as HTMLButtonElement;
   syncBtn = document.getElementById('sync-btn') as HTMLButtonElement;
   syncStatusText = document.getElementById('sync-status-text') as HTMLSpanElement;
@@ -610,7 +492,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 2. Undo/Redoスタックの初期化
   commandStack = new CommandStack(() => {
     if (commandStack) {
-      const isPast = canvasManager?.['currentPlaybackTime'] !== null;
+      const isPast = canvasManager?.isInPlaybackMode();
       undoBtn.disabled = isPast || !commandStack.canUndo();
       redoBtn.disabled = isPast || !commandStack.canRedo();
     }
@@ -637,63 +519,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
 
   canvasManager.onAddChildNode = async (parentNodeId) => {
-    if (!currentPageId || !commandStack || canvasManager?.['currentPlaybackTime']) return;
+    if (!currentPageId || !commandStack || !canvasManager || canvasManager.isInPlaybackMode()) return;
     
-    const parentNode = canvasManager!['nodes'].find((n) => n.id === parentNodeId);
-    if (!parentNode) return;
-
-    const nodes = canvasManager!['nodes'];
-    const edges = canvasManager!['edges'];
-    const isParentRoot = !edges.some((e) => e.target === parentNodeId);
-    const children = nodes.filter((n) => edges.some((e) => e.source === parentNodeId && e.target === n.id));
-
-    let side = 1; // 1 = right, -1 = left
-    if (isParentRoot) {
-      // 親がルートの場合、左右の既存の子ノード数を比較して少ない方に配置する
-      const rightChildrenCount = children.filter((c) => c.position.x > parentNode.position.x).length;
-      const leftChildrenCount = children.filter((c) => c.position.x < parentNode.position.x).length;
-      if (rightChildrenCount > leftChildrenCount) {
-        side = -1;
-      } else {
-        side = 1;
-      }
-    } else {
-      // 親がルート以外の場合、親と同じ側に配置する
-      const rootNode = nodes.find((n) => !edges.some((e) => e.target === n.id));
-      if (rootNode && parentNode.position.x < rootNode.position.x) {
-        side = -1;
-      } else {
-        side = 1;
-      }
-    }
-
-    const newX = parentNode.position.x + side * 240;
-
-    // Y座標の決定: 選択した側の既存の子ノードのY座標リストを取得し、重ならないスロットを探索する
-    const targetChildren = children.filter((c) => side === 1 ? c.position.x > parentNode.position.x : c.position.x < parentNode.position.x);
-    const existingYCoords = targetChildren.map((c) => c.position.y);
-
-    let slot = 0;
-    let targetY = parentNode.position.y;
-    while (true) {
-      let offsetY = 0;
-      if (slot > 0) {
-        const isOdd = slot % 2 !== 0;
-        const step = Math.ceil(slot / 2);
-        offsetY = isOdd ? 80 * step : -80 * step;
-      }
-      targetY = parentNode.position.y + offsetY;
-      const hasOverlap = existingYCoords.some((y) => Math.abs(y - targetY) < 40);
-      if (!hasOverlap) {
-        break;
-      }
-      slot++;
-    }
-
-    const newPos = {
-      x: newX,
-      y: targetY
-    };
+    const nodes = [...canvasManager.getNodes()];
+    const edges = [...canvasManager.getEdges()];
+    
+    const newPos = calculateChildNodePosition(parentNodeId, nodes, edges);
+    if (!newPos) return;
 
     const createdOut = { node: null as MindMapNode | null };
 
@@ -733,12 +565,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
 
   canvasManager.onAddRootNode = async (pos) => {
-    if (!currentPageId || !commandStack || canvasManager?.['currentPlaybackTime']) return;
+    if (!currentPageId || !commandStack || !canvasManager || canvasManager.isInPlaybackMode()) return;
 
     // 既にルートノード（親エッジを持たないノード）が存在するかチェック
-    const nodes = canvasManager!['nodes'];
-    const edges = canvasManager!['edges'];
-    const hasRoot = nodes.some((node) => !edges.some((edge) => edge.target === node.id));
+    const nodes = canvasManager.getNodes();
+    const edges = canvasManager.getEdges();
+    const hasRoot = nodes.some((node) => isRootNode(node.id, edges));
     if (hasRoot) {
       return;
     }
@@ -784,7 +616,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   radialMenuManager = new RadialMenuManager();
   
   canvasManager.onContextMenu = (nodeId, clientX, clientY) => {
-    if (canvasManager?.['currentPlaybackTime']) return;
+    if (canvasManager?.isInPlaybackMode()) return;
 
     radialMenuManager?.show(nodeId, clientX, clientY, {
       onEditText: (id) => {
@@ -835,58 +667,35 @@ document.addEventListener('DOMContentLoaded', async () => {
   const modalImage = document.getElementById('modal-image') as HTMLImageElement;
   const closeModalBtn = document.getElementById('close-modal-btn') as HTMLButtonElement;
   
-  canvasManager['canvas'].addEventListener('click', async (e) => {
+  canvasManager.getCanvasElement().addEventListener('click', async (e) => {
     if (!canvasManager) return;
-    const rect = canvasManager['canvas'].getBoundingClientRect();
+    const rect = canvasManager.getCanvasElement().getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
     
-    if (e.target !== canvasManager['canvas'] || document.querySelector('.canvas-textarea') || (radialMenuManager && radialMenuManager.isVisible())) {
+    if (e.target !== canvasManager.getCanvasElement() || document.querySelector('.canvas-textarea') || (radialMenuManager && radialMenuManager.isVisible())) {
       return;
     }
 
-    const worldPos = canvasManager['screenToWorld'](mouseX, mouseY);
-    const hitNode = canvasManager['findNodeAt'](worldPos);
+    const worldPos = canvasManager.screenToWorld(mouseX, mouseY);
+    const hitNode = canvasManager.findNodeAt(worldPos);
 
     if (hitNode && hitNode.media.hasImage && hitNode.media.imageRef) {
-      if (hitNode.id === canvasManager['hoveredNodeId'] && canvasManager['isHoveringPlusBtn']) {
+      if (canvasManager.isPositionOnPlusButton(hitNode.id, worldPos)) {
         return;
       }
 
-      const size = canvasManager['calculateNodeSize'](hitNode);
-      const rx = hitNode.position.x - size.width / 2;
-      const ry = hitNode.position.y - size.height / 2;
-
-      const paddingX = canvasManager['NODE_PADDING_X'];
-      const paddingY = canvasManager['NODE_PADDING_Y'];
-      
-      const img = canvasManager['imageCache'].get(hitNode.media.imageRef);
-      if (img && img.complete) {
-        const imgWidth = size.width - paddingX * 2;
-        const imgHeight = (img.height / img.width) * imgWidth;
-
-        const imgXMin = rx + paddingX;
-        const imgXMax = rx + paddingX + imgWidth;
-        const imgYMin = ry + paddingY;
-        const imgYMax = ry + paddingY + imgHeight;
-
-        if (
-          worldPos.x >= imgXMin &&
-          worldPos.x <= imgXMax &&
-          worldPos.y >= imgYMin &&
-          worldPos.y <= imgYMax
-        ) {
-          let displaySrc = hitNode.media.imageRef;
-          
-          const dbImageKey = `img-${hitNode.id}`;
-          const dbBlob = await db.getImage(dbImageKey);
-          if (dbBlob) {
-            displaySrc = URL.createObjectURL(dbBlob);
-          }
-
-          modalImage.src = displaySrc;
-          imageModal.classList.remove('hidden');
+      if (canvasManager.isPositionOnNodeImage(hitNode.id, worldPos)) {
+        let displaySrc = hitNode.media.imageRef;
+        
+        const dbImageKey = `img-${hitNode.id}`;
+        const dbBlob = await imageRepo.getImage(dbImageKey);
+        if (dbBlob) {
+          displaySrc = URL.createObjectURL(dbBlob);
         }
+
+        modalImage.src = displaySrc;
+        imageModal.classList.remove('hidden');
       }
     }
   });
@@ -905,19 +714,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     () => (canvasManager ? canvasManager.getSelectedNodeId() : null),
     {
       onUndo: () => {
-        if (commandStack && commandStack.canUndo() && !canvasManager?.['currentPlaybackTime']) {
+        if (commandStack && commandStack.canUndo() && !canvasManager?.isInPlaybackMode()) {
           commandStack.undo();
         }
       },
       onRedo: () => {
-        if (commandStack && commandStack.canRedo() && !canvasManager?.['currentPlaybackTime']) {
+        if (commandStack && commandStack.canRedo() && !canvasManager?.isInPlaybackMode()) {
           commandStack.redo();
         }
       },
       onAddSibling: async (nodeId) => {
-        if (!currentPageId || !commandStack || canvasManager?.['currentPlaybackTime']) return;
+        if (!currentPageId || !commandStack || !canvasManager || canvasManager.isInPlaybackMode()) return;
         
-        const edges = await db.getEdgesByPage(currentPageId);
+        const edges = await edgeRepo.getEdgesByPage(currentPageId);
         const parentEdge = edges.find((e) => e.target === nodeId);
         const parentId = parentEdge ? parentEdge.source : null;
 
@@ -926,13 +735,12 @@ document.addEventListener('DOMContentLoaded', async () => {
           return;
         }
 
-        const node = canvasManager!['nodes'].find((n) => n.id === nodeId);
+        const nodes = [...canvasManager.getNodes()];
+        const node = nodes.find((n) => n.id === nodeId);
         if (!node) return;
 
-        const newPos = {
-          x: node.position.x,
-          y: node.position.y + 80
-        };
+        const newPos = calculateSiblingNodePosition(nodeId, nodes);
+        if (!newPos) return;
 
         const createdOut = { node: null as MindMapNode | null };
 
@@ -976,7 +784,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       },
       onDeleteNode: async (nodeId) => {
-        if (canvasManager?.['currentPlaybackTime']) return;
+        if (canvasManager?.isInPlaybackMode()) return;
         if (confirm('このノードとすべての子ノードを削除しますか？')) {
           if (commandStack && currentPageId) {
             await commandStack.execute(
@@ -1055,10 +863,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         default:
           syncStatusText.textContent = 'Google Drive 同期';
           syncBtn.disabled = false;
-
+ 
           // 同期が成功した場合、メモリ側＆描画を最新データにリフレッシュする
           if (msg === '同期が成功しました') {
-            const pages = await db.getAllPages();
+            const pages = await pageRepo.getAllPages();
             if (pages.length > 0) {
               // 現在選択中のページが同期後も残っていればそれを維持、なければ最前面のページを表示
               const hasCurrent = pages.some((p) => p.pageId === currentPageId);
@@ -1103,13 +911,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   );
 
   // 初回ページロード
-  const pages = await db.getAllPages();
+  const pages = await pageRepo.getAllPages();
   if (pages.length > 0) {
     await selectPage(pages[0].pageId);
     await sidebarManager.loadPages(pages[0].pageId);
   } else {
-    const newPage = await db.createPage('ようこそノート');
-    await db.createNode({
+    const newPage = await pageRepo.createPage('ようこそノート');
+    await nodeRepo.createNode({
       pageId: newPage.pageId,
       text: '中心テーマ',
       media: {

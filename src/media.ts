@@ -1,4 +1,6 @@
-import * as db from './db';
+import * as nodeRepo from './data/node-repo';
+import * as imageRepo from './data/image-repo';
+import * as eventlogRepo from './data/eventlog-repo';
 
 export class MediaManager {
   // 画像リサイズ＆圧縮
@@ -86,17 +88,17 @@ export class MediaManager {
         const imageRef = `img-${nodeId}`;
         
         // IndexedDBに画像を保存
-        await db.saveImage(imageRef, compressedBlob);
+        await imageRepo.saveImage(imageRef, compressedBlob);
         
         // ローカルBlob URLの生成 (表示高速化用)
         const localBlobUrl = URL.createObjectURL(compressedBlob);
 
         // 既存ノードの音声メタデータを保持するために現在のノード情報を取得
-        const existingNode = await db.getDB().then((d) => d.get('nodes', nodeId));
+        const existingNode = await nodeRepo.getNode(nodeId);
         const existingMedia = existingNode?.media;
 
         // ノード情報を更新（永久IDである `img-nodeId` を保存する）
-        await db.updateNode(nodeId, {
+        await nodeRepo.updateNode(nodeId, {
           media: {
             hasImage: true,
             imageRef: imageRef, // 保存するのは永久参照キー（img-nodeId）
@@ -106,18 +108,20 @@ export class MediaManager {
         });
 
         // タイムライン履歴の記録
-        await db.addHistory({
-          pageId: await db.getDB().then((d) => d.get('nodes', nodeId).then((n) => n.pageId)),
-          timestamp: new Date().toISOString(),
-          action: 'update_node',
-          payload: {
-            nodeId,
-            media: {
-              hasImage: true,
-              imageRef
+        if (existingNode) {
+          await eventlogRepo.addHistory({
+            pageId: existingNode.pageId,
+            timestamp: new Date().toISOString(),
+            action: 'update_node',
+            payload: {
+              nodeId,
+              media: {
+                hasImage: true,
+                imageRef
+              }
             }
-          }
-        });
+          });
+        }
 
         onSuccess(localBlobUrl);
       } catch (err) {
@@ -137,7 +141,7 @@ export class MediaManager {
     }
 
     try {
-      const blob = await db.getImage(imageRef);
+      const blob = await imageRepo.getImage(imageRef);
       if (blob) {
         return URL.createObjectURL(blob);
       }

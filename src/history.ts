@@ -1,5 +1,8 @@
 import { MindMapNode, Edge, Position } from './types';
-import * as db from './db';
+import * as nodeRepo from './data/node-repo';
+import * as edgeRepo from './data/edge-repo';
+import * as imageRepo from './data/image-repo';
+import * as eventlogRepo from './data/eventlog-repo';
 
 // コマンドインターフェース
 export interface Command {
@@ -80,14 +83,13 @@ export class AddNodeCommand implements Command {
       this.node.createdAt = now;
       this.node.updatedAt = now;
       this.node.deleted = false;
-      const database = await db.getDB();
-      await database.put('nodes', this.node);
+      await nodeRepo.putNode(this.node);
       
       if (this.edge) {
         this.edge.createdAt = now;
         this.edge.updatedAt = now;
         this.edge.deleted = false;
-        await database.put('edges', this.edge);
+        await edgeRepo.putEdge(this.edge);
       }
     } else {
       const nodeObj: Omit<MindMapNode, 'id' | 'createdAt' | 'updatedAt'> = {
@@ -95,7 +97,7 @@ export class AddNodeCommand implements Command {
       };
       
       // ノード保存
-      this.node = await db.createNode(nodeObj);
+      this.node = await nodeRepo.createNode(nodeObj);
       
       // 戻り値設定
       if (this.createdNodeOut) {
@@ -104,7 +106,7 @@ export class AddNodeCommand implements Command {
 
       // エッジの追加
       if (this.parentNodeId) {
-        this.edge = await db.createEdge({
+        this.edge = await edgeRepo.createEdge({
           pageId: this.node.pageId,
           source: this.parentNodeId,
           target: this.node.id
@@ -112,7 +114,7 @@ export class AddNodeCommand implements Command {
       }
 
       // タイムライン再生用ログの保存
-      await db.addHistory({
+      await eventlogRepo.addHistory({
         pageId: this.node.pageId,
         timestamp: this.node.createdAt,
         action: 'create_node',
@@ -130,13 +132,13 @@ export class AddNodeCommand implements Command {
     if (this.node) {
       // エッジ削除
       if (this.edge) {
-        await db.deleteEdge(this.edge.id);
+        await edgeRepo.deleteEdge(this.edge.id);
       }
       // ノード削除
-      await db.deleteNode(this.node.id);
+      await nodeRepo.deleteNode(this.node.id);
 
       // タイムライン再生用ログの保存 (Undoもログに残すことで再生の完全性を担保)
-      await db.addHistory({
+      await eventlogRepo.addHistory({
         pageId: this.node.pageId,
         timestamp: new Date().toISOString(),
         action: 'delete_node',
@@ -162,13 +164,13 @@ export class MoveNodeCommand implements Command {
   }
 
   async execute() {
-    const node = await db.getDB().then((dbInst) => dbInst.get('nodes', this.nodeId));
+    const node = await nodeRepo.getNode(this.nodeId);
     if (node) {
       this.oldPos = { ...node.position };
-      await db.updateNode(this.nodeId, { position: this.newPos });
+      await nodeRepo.updateNode(this.nodeId, { position: this.newPos });
 
       // タイムライン再生用ログの保存
-      await db.addHistory({
+      await eventlogRepo.addHistory({
         pageId: node.pageId,
         timestamp: new Date().toISOString(),
         action: 'move_node',
@@ -182,12 +184,12 @@ export class MoveNodeCommand implements Command {
   }
 
   async undo() {
-    const node = await db.getDB().then((dbInst) => dbInst.get('nodes', this.nodeId));
+    const node = await nodeRepo.getNode(this.nodeId);
     if (node) {
-      await db.updateNode(this.nodeId, { position: this.oldPos });
+      await nodeRepo.updateNode(this.nodeId, { position: this.oldPos });
 
       // タイムライン再生用ログの保存
-      await db.addHistory({
+      await eventlogRepo.addHistory({
         pageId: node.pageId,
         timestamp: new Date().toISOString(),
         action: 'move_node',
@@ -212,13 +214,13 @@ export class UpdateNodeTextCommand implements Command {
   ) {}
 
   async execute() {
-    const node = await db.getDB().then((dbInst) => dbInst.get('nodes', this.nodeId));
+    const node = await nodeRepo.getNode(this.nodeId);
     if (node) {
       this.oldText = node.text;
-      await db.updateNode(this.nodeId, { text: this.newText });
+      await nodeRepo.updateNode(this.nodeId, { text: this.newText });
 
       // タイムライン再生用ログの保存
-      await db.addHistory({
+      await eventlogRepo.addHistory({
         pageId: node.pageId,
         timestamp: new Date().toISOString(),
         action: 'update_node',
@@ -232,12 +234,12 @@ export class UpdateNodeTextCommand implements Command {
   }
 
   async undo() {
-    const node = await db.getDB().then((dbInst) => dbInst.get('nodes', this.nodeId));
+    const node = await nodeRepo.getNode(this.nodeId);
     if (node) {
-      await db.updateNode(this.nodeId, { text: this.oldText });
+      await nodeRepo.updateNode(this.nodeId, { text: this.oldText });
 
       // タイムライン再生用ログの保存
-      await db.addHistory({
+      await eventlogRepo.addHistory({
         pageId: node.pageId,
         timestamp: new Date().toISOString(),
         action: 'update_node',
@@ -264,92 +266,25 @@ export class DeleteNodeCommand implements Command {
   ) {}
 
   async execute() {
-    const database = await db.getDB();
-    const node = await database.get('nodes', this.targetNodeId);
+    const node = await nodeRepo.getNode(this.targetNodeId);
     if (!node) return;
     
     this.pageId = node.pageId;
 
-    // 削除対象のノードと接続されているエッジを再帰的に収集
-    const allNodes = await db.getNodesByPage(this.pageId);
-    const allEdges = await db.getEdgesByPage(this.pageId);
-
-    const toDeleteNodeIds = new Set<string>();
-    const queue = [this.targetNodeId];
-
-    // 再帰的に子孫を検索
-    while (queue.length > 0) {
-      const currentId = queue.shift()!;
-      toDeleteNodeIds.add(currentId);
-
-      // 子ノードを見つける
-      const children = allEdges
-        .filter((e) => e.source === currentId)
-        .map((e) => e.target);
-      
-      for (const childId of children) {
-        if (!toDeleteNodeIds.has(childId)) {
-          queue.push(childId);
-        }
-      }
-    }
-
-    // 削除するノードの収集
-    this.deletedNodes = allNodes.filter((n) => toDeleteNodeIds.has(n.id));
-    
-    // 削除するエッジの収集 (両端のいずれかが削除対象ノードに接続されている場合)
-    this.deletedEdges = allEdges.filter(
-      (e) => toDeleteNodeIds.has(e.source) || toDeleteNodeIds.has(e.target)
-    );
-
-    // 画像データの収集と削除（物理削除ではなく、論理削除に変更）
-    const tx = database.transaction(['nodes', 'edges', 'images', 'pages'], 'readwrite');
-    const nodeStore = tx.objectStore('nodes');
-    const edgeStore = tx.objectStore('edges');
-    const imageStore = tx.objectStore('images');
-
-    const now = new Date().toISOString();
-    for (const n of this.deletedNodes) {
-      n.deleted = true;
-      n.updatedAt = now;
-      await nodeStore.put(n);
-      
-      if (n.media.hasImage && n.media.imageRef.startsWith('img-')) {
-        const imgObj = await imageStore.get(n.media.imageRef);
-        if (imgObj) {
-          this.deletedImages.push({
-            id: n.media.imageRef,
-            blob: imgObj.blob
-          });
-          await imageStore.delete(n.media.imageRef);
-        }
-      }
-    }
-
-    for (const e of this.deletedEdges) {
-      e.deleted = true;
-      e.updatedAt = now;
-      await edgeStore.put(e);
-    }
-
-    // ページ更新日時
-    const pageStore = tx.objectStore('pages');
-    const page = await pageStore.get(this.pageId);
-    if (page) {
-      page.updatedAt = new Date().toISOString();
-      await pageStore.put(page);
-    }
-
-    await tx.done;
+    // 削除対象のノードと接続されているエッジ・画像を再帰的に論理削除
+    const { deletedNodes, deletedEdges, deletedImages } = await nodeRepo.cascadeSoftDelete(this.targetNodeId);
+    this.deletedNodes = deletedNodes;
+    this.deletedEdges = deletedEdges;
+    this.deletedImages = deletedImages;
 
     // タイムライン再生用ログの保存
-    await db.addHistory({
+    await eventlogRepo.addHistory({
       pageId: this.pageId,
       timestamp: new Date().toISOString(),
       action: 'delete_node',
       payload: {
         nodeId: this.targetNodeId,
-        cascadeIds: Array.from(toDeleteNodeIds)
+        cascadeIds: this.deletedNodes.map((n) => n.id)
       }
     });
 
@@ -357,44 +292,15 @@ export class DeleteNodeCommand implements Command {
   }
 
   async undo() {
-    const database = await db.getDB();
-    const tx = database.transaction(['nodes', 'edges', 'images', 'pages'], 'readwrite');
-    
     // 画像の復元
-    const imageStore = tx.objectStore('images');
-    for (const img of this.deletedImages) {
-      await imageStore.put(img);
-    }
-
-    // ノードの復元（deletedをfalseにし、更新時刻を更新）
-    const now = new Date().toISOString();
-    const nodeStore = tx.objectStore('nodes');
-    for (const n of this.deletedNodes) {
-      n.deleted = false;
-      n.updatedAt = now;
-      await nodeStore.put(n);
-    }
-
+    await imageRepo.restoreImages(this.deletedImages);
+    // ノードの復元
+    await nodeRepo.restoreNodes(this.deletedNodes);
     // エッジの復元
-    const edgeStore = tx.objectStore('edges');
-    for (const e of this.deletedEdges) {
-      e.deleted = false;
-      e.updatedAt = now;
-      await edgeStore.put(e);
-    }
-
-    // ページ更新日時
-    const pageStore = tx.objectStore('pages');
-    const page = await pageStore.get(this.pageId);
-    if (page) {
-      page.updatedAt = new Date().toISOString();
-      await pageStore.put(page);
-    }
-
-    await tx.done;
+    await edgeRepo.restoreEdges(this.deletedEdges);
 
     // タイムライン再生用ログの保存
-    await db.addHistory({
+    await eventlogRepo.addHistory({
       pageId: this.pageId,
       timestamp: new Date().toISOString(),
       action: 'create_node',
@@ -419,28 +325,15 @@ export class AlignNodesCommand implements Command {
   ) {}
 
   async execute() {
-    // トランザクション外で先に非同期データ取得を完了させる
-    const allNodes = await db.getNodesByPage(this.pageId);
+    const allNodes = await nodeRepo.getNodesByPage(this.pageId);
     for (const node of allNodes) {
       this.originalPositions.set(node.id, { ...node.position });
     }
 
-    const database = await db.getDB();
-    const tx = database.transaction('nodes', 'readwrite');
-    const store = tx.objectStore('nodes');
-
-    // 新しい座標を書き込み
-    for (const [nodeId, pos] of this.newPositions.entries()) {
-      const node = allNodes.find((n) => n.id === nodeId);
-      if (node) {
-        node.position = { ...pos };
-        await store.put(node);
-      }
-    }
-    await tx.done;
+    await nodeRepo.updateNodePositions(Array.from(this.newPositions.entries()));
 
     // タイムライン再生用ログの保存
-    await db.addHistory({
+    await eventlogRepo.addHistory({
       pageId: this.pageId,
       timestamp: new Date().toISOString(),
       action: 'move_node',
@@ -453,24 +346,10 @@ export class AlignNodesCommand implements Command {
   }
 
   async undo() {
-    // トランザクション外で先に非同期データ取得を完了させる
-    const allNodes = await db.getNodesByPage(this.pageId);
-
-    const database = await db.getDB();
-    const tx = database.transaction('nodes', 'readwrite');
-    const store = tx.objectStore('nodes');
-
-    for (const [nodeId, pos] of this.originalPositions.entries()) {
-      const node = allNodes.find((n) => n.id === nodeId);
-      if (node) {
-        node.position = { ...pos };
-        await store.put(node);
-      }
-    }
-    await tx.done;
+    await nodeRepo.updateNodePositions(Array.from(this.originalPositions.entries()));
 
     // タイムライン再生用ログの保存
-    await db.addHistory({
+    await eventlogRepo.addHistory({
       pageId: this.pageId,
       timestamp: new Date().toISOString(),
       action: 'move_node',

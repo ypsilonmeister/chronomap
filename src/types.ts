@@ -39,11 +39,25 @@ export interface Edge {
   deleted?: boolean;    // 論理削除フラグ
 }
 
-export interface HistoryEntry {
+export type HistoryPayloadMap = {
+  create_node: { node: MindMapNode; parentNodeId: string | null } | { nodes: MindMapNode[]; edges: Edge[] };
+  update_node: { nodeId: string; text?: string; media?: Partial<NodeMedia> };
+  delete_node: { nodeId: string } | { nodeId: string; cascadeIds: string[] };
+  move_node: { nodeId: string; position: Position } | { positions: [string, Position][] };
+  update_page_title: { title: string };
+  create_edge: { edge: Edge };
+  delete_edge: { edgeId: string };
+};
+
+export type HistoryEntry = {
   id?: number;          // IndexedDB 自動インクリメントキー
   entryId: string;      // 同期時の名寄せ用ユニークID (UUIDv4)
   pageId: string;       // ページID
   timestamp: string;    // 操作時間 (ISO 8601)
-  action: 'create_node' | 'update_node' | 'delete_node' | 'create_edge' | 'delete_edge' | 'move_node' | 'update_page_title';
-  payload: any;         // 各アクション用のデータ
-}
+} & {
+  [K in keyof HistoryPayloadMap]: {
+    action: K;
+    payload: HistoryPayloadMap[K];
+  };
+}[keyof HistoryPayloadMap];
+
