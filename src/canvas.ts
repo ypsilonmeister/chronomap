@@ -545,6 +545,20 @@ export class MindMapCanvas {
         currentY += lineHeight;
       }
 
+      // 5.5. 時間情報の描画 (目立たないように小さく右寄せ)
+      currentY += 4;
+      this.ctx.fillStyle = isRoot ? 'rgba(255, 255, 255, 0.5)' : '#64748b';
+      this.ctx.font = '500 9px "Inter", "Noto Sans JP", sans-serif';
+      this.ctx.textAlign = 'right';
+      this.ctx.textBaseline = 'top';
+      const date = new Date(node.createdAt);
+      const h = date.getHours().toString().padStart(2, '0');
+      const m = date.getMinutes().toString().padStart(2, '0');
+      const s = date.getSeconds().toString().padStart(2, '0');
+      const timeStr = `${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')} ${h}:${m}:${s}`;
+      this.ctx.fillText(timeStr, rx + size.width - this.NODE_PADDING_X, currentY);
+      currentY += 12;
+
       // 6. ホバー時に「＋」派生ボタンを描画
       if (isHovered && !this.currentPlaybackTime) {
         this.drawPlusButton(rx + size.width, node.position.y);
@@ -644,7 +658,7 @@ export class MindMapCanvas {
 
     const lines = this.wrapText(node.text, this.NODE_MAX_WIDTH);
     const lineHeight = isRoot ? 18 : 16;
-    let height = this.NODE_PADDING_Y * 2 + lines.length * lineHeight;
+    let height = this.NODE_PADDING_Y * 2 + lines.length * lineHeight + 16; // 16px added for time metadata (4px spacing + 12px font height)
     let maxWidth = 0;
 
     for (const line of lines) {
@@ -654,7 +668,7 @@ export class MindMapCanvas {
       }
     }
 
-    let nodeWidth = Math.max(maxWidth + this.NODE_PADDING_X * 2, 80);
+    let nodeWidth = Math.max(maxWidth + this.NODE_PADDING_X * 2, 110); // Minimum width increased to 110 to fit time string
     nodeWidth = Math.min(nodeWidth, this.NODE_MAX_WIDTH + this.NODE_PADDING_X * 2);
 
     // 画像アタッチ時のサイズ加算
