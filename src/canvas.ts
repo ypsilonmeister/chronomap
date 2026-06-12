@@ -39,6 +39,8 @@ export class MindMapCanvas {
   private currentPlaybackTime: string | null = null;
   private longTapTimer: number | null = null;
   private isSwipeSelecting = false;
+  private sizeCache = new Map<string, { width: number; height: number; text: string; hasImage: boolean; imageRef: string; imageComplete: boolean; isRoot: boolean }>();
+  private edgeTargets = new Set<string>();
 
   // 定数
   private readonly NODE_MAX_WIDTH = 180;
@@ -72,8 +74,13 @@ export class MindMapCanvas {
 
     // AppStore の購読
     store.subscribe((state) => {
+      const pageIdChanged = state.currentPageId !== (this.nodes[0]?.pageId || null);
+      if (pageIdChanged) {
+        this.sizeCache.clear();
+      }
       this.nodes = state.nodes as MindMapNode[];
       this.edges = state.edges as Edge[];
+      this.edgeTargets = new Set(this.edges.map(e => e.target));
       this.currentPlaybackTime = state.playbackTime;
       this.selectedNodeId = state.selectedNodeId;
       this.applyTimeFilter();
@@ -338,9 +345,14 @@ export class MindMapCanvas {
     this.ctx.save();
     this.ctx.lineWidth = 2.5;
 
+    const nodeMap = new Map<string, MindMapNode>();
+    for (const n of this.filteredNodes) {
+      nodeMap.set(n.id, n);
+    }
+
     for (const edge of this.filteredEdges) {
-      const sourceNode = this.filteredNodes.find((n) => n.id === edge.source);
-      const targetNode = this.filteredNodes.find((n) => n.id === edge.target);
+      const sourceNode = nodeMap.get(edge.source);
+      const targetNode = nodeMap.get(edge.target);
 
       if (!sourceNode || !targetNode) continue;
 
@@ -408,7 +420,7 @@ export class MindMapCanvas {
       
       // グラデーションエッジ
       const grad = this.ctx.createLinearGradient(bestSPt.x, bestSPt.y, bestTPt.x, bestTPt.y);
-      const isParentRoot = !this.edges.some((e) => e.target === sourceNode.id);
+      const isParentRoot = !this.edgeTargets.has(sourceNode.id);
       
       if (isParentRoot) {
         grad.addColorStop(0, '#6366f1'); // インディゴ
@@ -453,7 +465,7 @@ export class MindMapCanvas {
 
       const isSelected = node.id === this.selectedNodeId;
       const isHovered = node.id === this.hoveredNodeId;
-      const isRoot = !this.edges.some((e) => e.target === node.id);
+      const isRoot = !this.edgeTargets.has(node.id);
 
       this.ctx.save();
 
@@ -611,8 +623,23 @@ export class MindMapCanvas {
 
   // ノードの動的なサイズ計算
   public calculateNodeSize(node: MindMapNode): { width: number; height: number } {
+    const isRoot = !this.edgeTargets.has(node.id);
+    const img = node.media.hasImage && node.media.imageRef ? this.imageCache.get(node.media.imageRef) : null;
+    const imgComplete = !!(img && img.complete);
+
+    const cached = this.sizeCache.get(node.id);
+    if (
+      cached &&
+      cached.text === node.text &&
+      cached.hasImage === node.media.hasImage &&
+      cached.imageRef === node.media.imageRef &&
+      cached.imageComplete === imgComplete &&
+      cached.isRoot === isRoot
+    ) {
+      return { width: cached.width, height: cached.height };
+    }
+
     this.ctx.save();
-    const isRoot = !this.edges.some((e) => e.target === node.id);
     this.ctx.font = isRoot ? '600 14px "Inter", "Noto Sans JP", sans-serif' : '400 13px "Inter", "Noto Sans JP", sans-serif';
 
     const lines = this.wrapText(node.text, this.NODE_MAX_WIDTH);
@@ -632,7 +659,6 @@ export class MindMapCanvas {
 
     // 画像アタッチ時のサイズ加算
     if (node.media.hasImage && node.media.imageRef) {
-      const img = this.imageCache.get(node.media.imageRef);
       if (img && img.complete) {
         const imgWidth = nodeWidth - this.NODE_PADDING_X * 2;
         const imgHeight = (img.height / img.width) * imgWidth;
@@ -643,10 +669,23 @@ export class MindMapCanvas {
     }
 
     this.ctx.restore();
-    return { 
+
+    const size = { 
       width: nodeWidth, 
       height: Math.max(height, this.NODE_MIN_HEIGHT) 
     };
+
+    this.sizeCache.set(node.id, {
+      width: size.width,
+      height: size.height,
+      text: node.text,
+      hasImage: node.media.hasImage,
+      imageRef: node.media.imageRef,
+      imageComplete: imgComplete,
+      isRoot
+    });
+
+    return size;
   }
 
   // 画像キャッシュと動的ロード

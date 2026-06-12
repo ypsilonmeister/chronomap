@@ -1,5 +1,6 @@
 import { getAllDataForSync, restoreAllDataFromSync } from './data/database';
 import { store } from './app/store';
+import { mergeData } from './domain/merge';
 
 export class GoogleDriveSyncManager {
   // OAuth2 設定 (Viteの環境変数からロード)
@@ -120,7 +121,7 @@ export class GoogleDriveSyncManager {
 
       // 3. クラウドデータとローカルデータのマージ (競合解消)
       this.updateStatus('syncing', 'データをマージ中...');
-      const mergedData = await this.mergeData(localData, cloudData);
+      const mergedData = mergeData(localData, cloudData);
 
       // 4. マージされたデータをローカル IndexedDB に書き戻す
       this.updateStatus('syncing', 'ローカルデータベースに書き込み中...');
@@ -222,86 +223,6 @@ export class GoogleDriveSyncManager {
     await restoreAllDataFromSync(data);
   }
 
-  // 競合解消マージ処理 (updatedAt が新しい方を採用)
-  private async mergeData(local: any, cloud: any) {
-    if (!cloud) {
-      // クラウドデータが無い場合でも、ローカルデータから孤立した画像を削除して返却する
-      const activeImageRefs = new Set(
-        local.nodes
-          .filter((n: any) => !n.deleted && n.media.hasImage && n.media.imageRef)
-          .map((n: any) => n.media.imageRef)
-      );
-      local.images = local.images.filter((img: any) => activeImageRefs.has(img.id));
-      return local;
-    }
-
-    const merged = {
-      pages: this.mergeEntities(local.pages, cloud.pages, 'pageId'),
-      nodes: this.mergeEntities(local.nodes, cloud.nodes, 'id'),
-      edges: this.mergeEntities(local.edges, cloud.edges, 'id', true), // エッジも updatedAt 比較でマージ
-      history: this.mergeEntities(local.history, cloud.history, 'entryId', false), // 履歴は entryId でマージ
-      images: this.mergeImages(local.images, cloud.images),
-    };
-
-    // 画像データのガーベジコレクション (アクティブなノードから参照されていない画像を排除)
-    const activeImageRefs = new Set(
-      merged.nodes
-        .filter((n: any) => !n.deleted && n.media.hasImage && n.media.imageRef)
-        .map((n: any) => n.media.imageRef)
-    );
-    merged.images = merged.images.filter((img: any) => activeImageRefs.has(img.id));
-
-    return merged;
-  }
-
-  // 汎用エンティティマージ (updatedAt 比較)
-  private mergeEntities(localList: any[], cloudList: any[], idKey: string, useUpdatedAt = true): any[] {
-    const map = new Map<string, any>();
-    
-    // まずローカルデータを格納
-    for (const item of localList) {
-      map.set(item[idKey], item);
-    }
-
-    // クラウドデータと比較しながらマージ
-    for (const cloudItem of cloudList) {
-      const id = cloudItem[idKey];
-      const localItem = map.get(id);
-
-      if (!localItem) {
-        // クラウドにしか存在しない場合は追加
-        map.set(id, cloudItem);
-      } else if (useUpdatedAt) {
-        // 両方にある場合は updatedAt を比較
-        const localTime = new Date(localItem.updatedAt || localItem.createdAt || 0).getTime();
-        const cloudTime = new Date(cloudItem.updatedAt || cloudItem.createdAt || 0).getTime();
-        
-        if (cloudTime > localTime) {
-          map.set(id, cloudItem);
-        }
-      }
-    }
-
-    return Array.from(map.values());
-  }
-
-  // 画像ストアのマージ
-  private mergeImages(localImages: any[], cloudImages: any[]): any[] {
-    const map = new Map<string, any>();
-    
-    for (const img of localImages) {
-      map.set(img.id, img);
-    }
-    
-    // クラウド側画像で上書き/マージ (ノードの updatedAt マージが正常に行われるため画像自体は重複のない方を優先して取り込む)
-    for (const cloudImg of cloudImages) {
-      if (!map.has(cloudImg.id)) {
-        map.set(cloudImg.id, cloudImg);
-      }
-    }
-
-    return Array.from(map.values());
-  }
 
   // ==========================================
   // ユーティリティ
