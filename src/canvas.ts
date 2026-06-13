@@ -518,9 +518,21 @@ export class MindMapCanvas {
       const isRoot = !this.edgeTargets.has(node.id);
 
       this.ctx.save();
+      // Node Color variables
+      const nodeColor = node.color || 'default';
 
-      // 1. シャドウ (選択中またはホバー中は強めに)
-      this.ctx.shadowColor = isSelected ? 'rgba(99, 102, 241, 0.4)' : 'rgba(0, 0, 0, 0.4)';
+      // 1. シャドウ (選択中またはホバー中は強めに、ノードカラーに応じた発光色を適用)
+      let shadowCol = 'rgba(0, 0, 0, 0.4)';
+      if (isSelected) {
+        if (nodeColor === 'blue') shadowCol = 'rgba(59, 130, 246, 0.4)';
+        else if (nodeColor === 'green') shadowCol = 'rgba(16, 185, 129, 0.4)';
+        else if (nodeColor === 'orange') shadowCol = 'rgba(249, 115, 22, 0.4)';
+        else if (nodeColor === 'pink') shadowCol = 'rgba(236, 72, 153, 0.4)';
+        else if (nodeColor === 'purple') shadowCol = 'rgba(168, 85, 247, 0.4)';
+        else if (nodeColor === 'red') shadowCol = 'rgba(239, 68, 68, 0.4)';
+        else shadowCol = 'rgba(99, 102, 241, 0.4)';
+      }
+      this.ctx.shadowColor = shadowCol;
       this.ctx.shadowBlur = isSelected ? 15 : isHovered ? 10 : 6;
       this.ctx.shadowOffsetY = 4;
 
@@ -531,23 +543,80 @@ export class MindMapCanvas {
       if (isRoot) {
         // ルートノードはグラデーション背景
         const grad = this.ctx.createLinearGradient(rx, ry, rx + size.width, ry + size.height);
-        grad.addColorStop(0, '#6366f1');
-        grad.addColorStop(1, '#a855f7');
+        if (nodeColor === 'blue') {
+          grad.addColorStop(0, '#2563eb');
+          grad.addColorStop(1, '#3b82f6');
+        } else if (nodeColor === 'green') {
+          grad.addColorStop(0, '#059669');
+          grad.addColorStop(1, '#10b981');
+        } else if (nodeColor === 'orange') {
+          grad.addColorStop(0, '#ea580c');
+          grad.addColorStop(1, '#f97316');
+        } else if (nodeColor === 'pink') {
+          grad.addColorStop(0, '#db2777');
+          grad.addColorStop(1, '#ec4899');
+        } else if (nodeColor === 'purple') {
+          grad.addColorStop(0, '#7c3aed');
+          grad.addColorStop(1, '#a855f7');
+        } else if (nodeColor === 'red') {
+          grad.addColorStop(0, '#dc2626');
+          grad.addColorStop(1, '#ef4444');
+        } else {
+          grad.addColorStop(0, '#6366f1');
+          grad.addColorStop(1, '#a855f7');
+        }
         this.ctx.fillStyle = grad;
+        this.ctx.fill();
       } else {
-        // 子ノードはグラスモルフィズム風の半透明背景
-        this.ctx.fillStyle = isHovered ? 'rgba(30, 41, 59, 0.95)' : 'rgba(15, 23, 42, 0.85)';
+        // 子ノードはグラスモルフィズム風の半透明背景 + 選択色のオーバーレイ
+        let baseBg = isHovered ? 'rgba(30, 41, 59, 0.95)' : 'rgba(15, 23, 42, 0.85)';
+        this.ctx.fillStyle = baseBg;
+        this.ctx.fill();
+
+        if (nodeColor !== 'default') {
+          this.ctx.save();
+          this.ctx.beginPath();
+          this.ctx.roundRect?.(rx, ry, size.width, size.height, 10);
+          
+          let tint = 'rgba(0, 0, 0, 0)';
+          if (nodeColor === 'blue') tint = isHovered ? 'rgba(59, 130, 246, 0.18)' : 'rgba(59, 130, 246, 0.1)';
+          else if (nodeColor === 'green') tint = isHovered ? 'rgba(16, 185, 129, 0.18)' : 'rgba(16, 185, 129, 0.1)';
+          else if (nodeColor === 'orange') tint = isHovered ? 'rgba(249, 115, 22, 0.18)' : 'rgba(249, 115, 22, 0.1)';
+          else if (nodeColor === 'pink') tint = isHovered ? 'rgba(236, 72, 153, 0.18)' : 'rgba(236, 72, 153, 0.1)';
+          else if (nodeColor === 'purple') tint = isHovered ? 'rgba(168, 85, 247, 0.18)' : 'rgba(168, 85, 247, 0.1)';
+          else if (nodeColor === 'red') tint = isHovered ? 'rgba(239, 68, 68, 0.18)' : 'rgba(239, 68, 68, 0.1)';
+          
+          this.ctx.fillStyle = tint;
+          this.ctx.fill();
+          this.ctx.restore();
+        }
       }
-      this.ctx.fill();
 
       // 3. ボーダー
       this.ctx.shadowBlur = 0;
       this.ctx.shadowOffsetY = 0;
+
+      let borderStyle = isRoot ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.08)';
+      if (!isRoot && nodeColor !== 'default') {
+        if (nodeColor === 'blue') borderStyle = 'rgba(59, 130, 246, 0.5)';
+        else if (nodeColor === 'green') borderStyle = 'rgba(16, 185, 129, 0.5)';
+        else if (nodeColor === 'orange') borderStyle = 'rgba(249, 115, 22, 0.5)';
+        else if (nodeColor === 'pink') borderStyle = 'rgba(236, 72, 153, 0.5)';
+        else if (nodeColor === 'purple') borderStyle = 'rgba(168, 85, 247, 0.5)';
+        else if (nodeColor === 'red') borderStyle = 'rgba(239, 68, 68, 0.5)';
+      }
+
       if (isSelected) {
-        this.ctx.strokeStyle = '#818cf8';
-        this.ctx.lineWidth = 2;
+        if (nodeColor === 'blue') this.ctx.strokeStyle = '#60a5fa';
+        else if (nodeColor === 'green') this.ctx.strokeStyle = '#34d399';
+        else if (nodeColor === 'orange') this.ctx.strokeStyle = '#fb923c';
+        else if (nodeColor === 'pink') this.ctx.strokeStyle = '#f472b6';
+        else if (nodeColor === 'purple') this.ctx.strokeStyle = '#c084fc';
+        else if (nodeColor === 'red') this.ctx.strokeStyle = '#f87171';
+        else this.ctx.strokeStyle = '#818cf8';
+        this.ctx.lineWidth = 2.5;
       } else {
-        this.ctx.strokeStyle = isRoot ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.08)';
+        this.ctx.strokeStyle = borderStyle;
         this.ctx.lineWidth = 1;
       }
       this.ctx.stroke();

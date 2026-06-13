@@ -389,3 +389,49 @@ export class UpdatePageTitleCommand implements Command {
     }
   }
 }
+
+// 7. ノード色更新コマンド
+export class UpdateNodeColorCommand implements Command {
+  private oldColor?: string;
+
+  constructor(
+    private nodeId: string,
+    private newColor?: string
+  ) {}
+
+  async execute() {
+    const node = await nodeRepo.getNode(this.nodeId);
+    if (node) {
+      this.oldColor = node.color;
+      await nodeRepo.updateNode(this.nodeId, { color: this.newColor });
+
+      await eventlogRepo.addHistory({
+        pageId: node.pageId,
+        timestamp: new Date().toISOString(),
+        action: 'update_node',
+        payload: {
+          nodeId: this.nodeId,
+          color: this.newColor
+        }
+      });
+    }
+  }
+
+  async undo() {
+    const node = await nodeRepo.getNode(this.nodeId);
+    if (node) {
+      await nodeRepo.updateNode(this.nodeId, { color: this.oldColor });
+
+      await eventlogRepo.addHistory({
+        pageId: node.pageId,
+        timestamp: new Date().toISOString(),
+        action: 'update_node',
+        payload: {
+          nodeId: this.nodeId,
+          color: this.oldColor
+        }
+      });
+    }
+  }
+}
+

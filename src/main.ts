@@ -18,6 +18,8 @@ import { PageController } from './ui/page-controller';
 import { SyncController } from './ui/sync-controller';
 import { ImageViewerController } from './ui/image-viewer';
 import { ExportImportController } from './ui/export-import-controller';
+import { NodeColorController } from './ui/node-color-controller';
+
 
 function initIcons() {
   createIcons({
@@ -109,6 +111,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   syncController.initEvents();
   imageViewer.initEvents();
   exportImportController.initEvents();
+  new NodeColorController(canvasManager, commandStack);
+
 
 
   // Sidebar toggling & Help modals (Miscellaneous UI)

@@ -120,7 +120,7 @@ export class ExportImportController {
       const page = state.pages.find((p) => p.pageId === pageId);
       const title = page ? page.title : 'notebook';
 
-      const markdown = this.generateMarkdownOutline(title, state.nodes, state.edges);
+      const markdown = generateMarkdownOutline(title, state.nodes, state.edges);
       
       const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
@@ -224,57 +224,6 @@ export class ExportImportController {
     }
   }
 
-  // --- Helper: Markdown generation ---
-  private generateMarkdownOutline(pageTitle: string, nodes: any[], edges: any[]): string {
-    const incoming = new Set(edges.map((e) => e.target));
-    const roots = nodes.filter((n) => !incoming.has(n.id));
-
-    const nodeMap = new Map(nodes.map((n) => [n.id, n]));
-    const childrenMap = new Map<string, string[]>();
-    for (const edge of edges) {
-      let list = childrenMap.get(edge.source);
-      if (!list) {
-        list = [];
-        childrenMap.set(edge.source, list);
-      }
-      list.push(edge.target);
-    }
-
-    let result = `# ${pageTitle}\n\n`;
-
-    const formattedNodes = new Set<string>();
-
-    const formatNode = (nodeId: string, depth: number) => {
-      const node = nodeMap.get(nodeId);
-      if (!node || formattedNodes.has(nodeId)) return;
-
-      formattedNodes.add(nodeId);
-      const indent = '  '.repeat(depth);
-      result += `${indent}- ${node.text}\n`;
-
-      const children = childrenMap.get(nodeId) || [];
-      for (const childId of children) {
-        formatNode(childId, depth + 1);
-      }
-    };
-
-    // Print roots
-    for (const root of roots) {
-      formatNode(root.id, 0);
-    }
-
-    // Fallback: If there are unformatted nodes, list them
-    const unformatted = nodes.filter((n) => !formattedNodes.has(n.id));
-    if (unformatted.length > 0) {
-      result += '\n## その他のノード\n\n';
-      for (const node of unformatted) {
-        result += `- ${node.text}\n`;
-      }
-    }
-
-    return result;
-  }
-
   // --- Helper: Blob to Base64 ---
   private blobToBase64(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -300,4 +249,55 @@ export class ExportImportController {
       }
     }
   }
+}
+
+// --- Helper: Markdown generation ---
+export function generateMarkdownOutline(pageTitle: string, nodes: any[], edges: any[]): string {
+  const incoming = new Set(edges.map((e) => e.target));
+  const roots = nodes.filter((n) => !incoming.has(n.id));
+
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  const childrenMap = new Map<string, string[]>();
+  for (const edge of edges) {
+    let list = childrenMap.get(edge.source);
+    if (!list) {
+      list = [];
+      childrenMap.set(edge.source, list);
+    }
+    list.push(edge.target);
+  }
+
+  let result = `# ${pageTitle}\n\n`;
+
+  const formattedNodes = new Set<string>();
+
+  const formatNode = (nodeId: string, depth: number) => {
+    const node = nodeMap.get(nodeId);
+    if (!node || formattedNodes.has(nodeId)) return;
+
+    formattedNodes.add(nodeId);
+    const indent = '  '.repeat(depth);
+    result += `${indent}- ${node.text}\n`;
+
+    const children = childrenMap.get(nodeId) || [];
+    for (const childId of children) {
+      formatNode(childId, depth + 1);
+    }
+  };
+
+  // Print roots
+  for (const root of roots) {
+    formatNode(root.id, 0);
+  }
+
+  // Fallback: If there are unformatted nodes, list them
+  const unformatted = nodes.filter((n) => !formattedNodes.has(n.id));
+  if (unformatted.length > 0) {
+    result += '\n## その他のノード\n\n';
+    for (const node of unformatted) {
+      result += `- ${node.text}\n`;
+    }
+  }
+
+  return result;
 }

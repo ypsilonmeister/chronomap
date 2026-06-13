@@ -1043,3 +1043,102 @@ kbd {
   color: var(--text-primary);
 }
 
+/* -------------------------------------------------------------
+   ノード配色変更ツールバーのスタイル
+   ------------------------------------------------------------- */
+#node-color-toolbar {
+  position: absolute;
+  bottom: 110px;
+  left: 20px;
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 10;
+  font-size: 0.85rem;
+  animation: slideUpFade 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#node-color-toolbar.hidden {
+  display: none !important;
+}
+
+.color-toolbar-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.color-options {
+  display: flex;
+  gap: 8px;
+}
+
+.color-option-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.15);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s, box-shadow 0.2s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.color-option-btn:hover {
+  transform: scale(1.25);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.color-option-btn.active {
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.8), 0 2px 4px rgba(0, 0, 0, 0.3);
+  transform: scale(1.25);
+}
+
+/* 各色ボタンの背景色定義 */
+.color-option-btn.default {
+  background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+}
+.color-option-btn.blue {
+  background: #3b82f6;
+}
+.color-option-btn.green {
+  background: #10b981;
+}
+.color-option-btn.orange {
+  background: #f97316;
+}
+.color-option-btn.pink {
+  background: #ec4899;
+}
+.color-option-btn.purple {
+  background: #a855f7;
+}
+.color-option-btn.red {
+  background: #ef4444;
+}
+
+/* ツールバー表示時のスライドアニメーション */
+@keyframes slideUpFade {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* モバイル対応：インジケータとの干渉を防ぐため配置調整 */
+@media (max-width: 768px) {
+  #node-color-toolbar {
+    bottom: 160px; /* モバイルではズームと被らないように上に逃がす */
+    left: 12px;
+    right: 12px;
+    justify-content: center;
+  }
+}
+
+

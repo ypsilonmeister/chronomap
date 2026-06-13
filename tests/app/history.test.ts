@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { UpdatePageTitleCommand } from '../../src/history';
+import { UpdatePageTitleCommand, UpdateNodeColorCommand } from '../../src/history';
 import * as pageRepo from '../../src/data/page-repo';
+import * as nodeRepo from '../../src/data/node-repo';
 import * as eventlogRepo from '../../src/data/eventlog-repo';
 
 vi.mock('../../src/data/page-repo', () => ({
@@ -11,6 +12,12 @@ vi.mock('../../src/data/page-repo', () => ({
 vi.mock('../../src/data/eventlog-repo', () => ({
   addHistory: vi.fn(),
 }));
+
+vi.mock('../../src/data/node-repo', () => ({
+  getNode: vi.fn(),
+  updateNode: vi.fn(),
+}));
+
 
 vi.mock('../../src/app/store', () => ({
   store: {
@@ -63,3 +70,48 @@ describe('UpdatePageTitleCommand', () => {
     }));
   });
 });
+
+describe('UpdateNodeColorCommand', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('should execute and update node color, then log history', async () => {
+    const mockNode = { id: 'node1', pageId: 'page1', text: 'Theme', color: undefined, createdAt: '...', updatedAt: '...' };
+    vi.mocked(nodeRepo.getNode).mockResolvedValue(mockNode as any);
+
+    const command = new UpdateNodeColorCommand('node1', 'blue');
+    await command.execute();
+
+    expect(nodeRepo.getNode).toHaveBeenCalledWith('node1');
+    expect(nodeRepo.updateNode).toHaveBeenCalledWith('node1', { color: 'blue' });
+    expect(eventlogRepo.addHistory).toHaveBeenCalledWith(expect.objectContaining({
+      pageId: 'page1',
+      action: 'update_node',
+      payload: { nodeId: 'node1', color: 'blue' },
+    }));
+  });
+
+  it('should undo and restore the original node color, then log history', async () => {
+    const mockNode = { id: 'node1', pageId: 'page1', text: 'Theme', color: 'blue', createdAt: '...', updatedAt: '...' };
+    vi.mocked(nodeRepo.getNode).mockResolvedValue(mockNode as any);
+
+    const command = new UpdateNodeColorCommand('node1', 'red');
+    
+    // Execute first to capture the old color ('blue')
+    await command.execute();
+
+    vi.clearAllMocks();
+    vi.mocked(nodeRepo.getNode).mockResolvedValue({ ...mockNode, color: 'red' } as any);
+
+    await command.undo();
+
+    expect(nodeRepo.updateNode).toHaveBeenCalledWith('node1', { color: 'blue' });
+    expect(eventlogRepo.addHistory).toHaveBeenCalledWith(expect.objectContaining({
+      pageId: 'page1',
+      action: 'update_node',
+      payload: { nodeId: 'node1', color: 'blue' },
+    }));
+  });
+});
+

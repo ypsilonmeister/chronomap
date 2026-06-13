@@ -343,7 +343,7 @@ export async function importPageJSON(jsonContent: string): Promise<string> {
 }
 
 // 履歴ペイロード内IDのマッピングヘルパー
-function mapHistoryPayload(action: string, payload: any, nodeIdMap: Map<string, string>, newPageId: string): any {
+export function mapHistoryPayload(action: string, payload: any, nodeIdMap: Map<string, string>, newPageId: string): any {
   if (!payload) return payload;
   const p = { ...payload };
 

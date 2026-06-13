@@ -27,7 +27,9 @@ export interface MindMapNode {
   createdAt: string;    // ISO 8601
   updatedAt: string;    // ISO 8601
   deleted?: boolean;    // 論理削除フラグ
+  color?: string;       // ノードの色
 }
+
 
 export interface Edge {
   id: string;           // UUIDv4
@@ -41,7 +43,7 @@ export interface Edge {
 
 export type HistoryPayloadMap = {
   create_node: { node: MindMapNode; parentNodeId: string | null } | { nodes: MindMapNode[]; edges: Edge[] };
-  update_node: { nodeId: string; text?: string; media?: Partial<NodeMedia> };
+  update_node: { nodeId: string; text?: string; media?: Partial<NodeMedia>; color?: string };
   delete_node: { nodeId: string } | { nodeId: string; cascadeIds: string[] };
   move_node: { nodeId: string; position: Position } | { positions: [string, Position][] };
   update_page_title: { title: string };
