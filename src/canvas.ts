@@ -41,6 +41,8 @@ export class MindMapCanvas {
   private isSwipeSelecting = false;
   private sizeCache = new Map<string, { width: number; height: number; text: string; hasImage: boolean; imageRef: string; imageComplete: boolean; isRoot: boolean }>();
   private edgeTargets = new Set<string>();
+  private hoveredEdgeId: string | null = null;
+  private isHoveringEdgeBtn = false;
 
   // 定数
   private readonly NODE_MAX_WIDTH = 180;
@@ -49,12 +51,14 @@ export class MindMapCanvas {
   private readonly NODE_MIN_HEIGHT = 40;
   private readonly PLUS_BTN_RADIUS = 15;
   private readonly PLUS_BTN_OFFSET_X = 20; // ノード右端からのオフセット
+  private readonly INSERT_BTN_RADIUS = 12;
 
   // コールバック
   public onNodeSelected: ((nodeId: string | null) => void) | null = null;
   public onNodeMoved: ((nodeId: string, pos: Position) => void) | null = null;
   public onAddChildNode: ((parentNodeId: string) => void) | null = null;
   public onAddRootNode: ((pos: Position) => void) | null = null;
+  public onInsertNodeOnEdge: ((edgeId: string, pos: Position) => void) | null = null;
   public onContextMenu: ((nodeId: string, x: number, y: number) => void) | null = null;
   public onRadialSwipe: ((clientX: number, clientY: number) => void) | null = null;
   public onRadialRelease: (() => void) | null = null;
@@ -83,6 +87,8 @@ export class MindMapCanvas {
       this.edgeTargets = new Set(this.edges.map(e => e.target));
       this.currentPlaybackTime = state.playbackTime;
       this.selectedNodeId = state.selectedNodeId;
+      this.hoveredEdgeId = null;
+      this.isHoveringEdgeBtn = false;
       this.applyTimeFilter();
       this.requestRender();
     });
@@ -380,6 +386,9 @@ export class MindMapCanvas {
     // エッジ (線) の描画
     this.drawEdges();
 
+    // エッジ挿入ボタンの描画（ホバーされている場合）
+    this.drawEdgeInsertButton();
+
     // ノードの描画
     this.drawNodes(width, height);
 
@@ -388,6 +397,92 @@ export class MindMapCanvas {
     if (this.onRender) {
       this.onRender();
     }
+  }
+
+  // エッジの接続候補点と中間点（t = 0.5）を取得するヘルパー
+  private getEdgePoints(edge: Edge): {
+    sx: number; sy: number; tx: number; ty: number;
+    cp1x: number; cp1y: number; cp2x: number; cp2y: number;
+    midX: number; midY: number;
+  } | null {
+    const sourceNode = this.nodes.find((n) => n.id === edge.source && !n.deleted);
+    const targetNode = this.nodes.find((n) => n.id === edge.target && !n.deleted);
+    if (!sourceNode || !targetNode) return null;
+
+    const sourceSize = this.calculateNodeSize(sourceNode);
+    const targetSize = this.calculateNodeSize(targetNode);
+
+    const sx = sourceNode.position.x;
+    const sy = sourceNode.position.y;
+    const tx = targetNode.position.x;
+    const ty = targetNode.position.y;
+
+    const sPoints = [
+      { x: sx - sourceSize.width / 2, y: sy, direction: 'left' },
+      { x: sx + sourceSize.width / 2, y: sy, direction: 'right' },
+      { x: sx, y: sy - sourceSize.height / 2, direction: 'top' },
+      { x: sx, y: sy + sourceSize.height / 2, direction: 'bottom' }
+    ];
+
+    const tPoints = [
+      { x: tx - targetSize.width / 2, y: ty, direction: 'left' },
+      { x: tx + targetSize.width / 2, y: ty, direction: 'right' },
+      { x: tx, y: ty - targetSize.height / 2, direction: 'top' },
+      { x: tx, y: ty + targetSize.height / 2, direction: 'bottom' }
+    ];
+
+    let bestSPt = sPoints[0];
+    let bestTPt = tPoints[0];
+    let minDistance = Infinity;
+
+    for (const sPt of sPoints) {
+      for (const tPt of tPoints) {
+        const dist = Math.hypot(sPt.x - tPt.x, sPt.y - tPt.y);
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestSPt = sPt;
+          bestTPt = tPt;
+        }
+      }
+    }
+
+    let cp1x = bestSPt.x;
+    let cp1y = bestSPt.y;
+    if (bestSPt.direction === 'left') cp1x -= 60;
+    else if (bestSPt.direction === 'right') cp1x += 60;
+    else if (bestSPt.direction === 'top') cp1y -= 60;
+    else if (bestSPt.direction === 'bottom') cp1y += 60;
+
+    let cp2x = bestTPt.x;
+    let cp2y = bestTPt.y;
+    if (bestTPt.direction === 'left') cp2x -= 60;
+    else if (bestTPt.direction === 'right') cp2x += 60;
+    else if (bestTPt.direction === 'top') cp2y -= 60;
+    else if (bestTPt.direction === 'bottom') cp2y += 60;
+
+    // 3次ベジェ曲線の中間点 (t = 0.5) を計算
+    const t = 0.5;
+    const mt = 1 - t;
+    const w0 = mt * mt * mt;      // 0.125
+    const w1 = 3 * mt * mt * t;  // 0.375
+    const w2 = 3 * mt * t * t;    // 0.375
+    const w3 = t * t * t;        // 0.125
+
+    const midX = w0 * bestSPt.x + w1 * cp1x + w2 * cp2x + w3 * bestTPt.x;
+    const midY = w0 * bestSPt.y + w1 * cp1y + w2 * cp2y + w3 * bestTPt.y;
+
+    return {
+      sx: bestSPt.x,
+      sy: bestSPt.y,
+      tx: bestTPt.x,
+      ty: bestTPt.y,
+      cp1x,
+      cp1y,
+      cp2x,
+      cp2y,
+      midX,
+      midY
+    };
   }
 
   // エッジの描画
@@ -401,77 +496,20 @@ export class MindMapCanvas {
     }
 
     for (const edge of this.filteredEdges) {
+      const pts = this.getEdgePoints(edge);
+      if (!pts) continue;
+
       const sourceNode = nodeMap.get(edge.source);
-      const targetNode = nodeMap.get(edge.target);
+      if (!sourceNode) continue;
 
-      if (!sourceNode || !targetNode) continue;
-
-      const sourceSize = this.calculateNodeSize(sourceNode);
-      const targetSize = this.calculateNodeSize(targetNode);
-
-      // 開始座標と終了座標
-      const sx = sourceNode.position.x;
-      const sy = sourceNode.position.y;
-      const tx = targetNode.position.x;
-      const ty = targetNode.position.y;
-
-      // 親ノードの接続候補点（4方向）
-      const sPoints = [
-        { x: sx - sourceSize.width / 2, y: sy, direction: 'left' },
-        { x: sx + sourceSize.width / 2, y: sy, direction: 'right' },
-        { x: sx, y: sy - sourceSize.height / 2, direction: 'top' },
-        { x: sx, y: sy + sourceSize.height / 2, direction: 'bottom' }
-      ];
-
-      // 子ノードの接続候補点（4方向）
-      const tPoints = [
-        { x: tx - targetSize.width / 2, y: ty, direction: 'left' },
-        { x: tx + targetSize.width / 2, y: ty, direction: 'right' },
-        { x: tx, y: ty - targetSize.height / 2, direction: 'top' },
-        { x: tx, y: ty + targetSize.height / 2, direction: 'bottom' }
-      ];
-
-      // 最短距離となる接続点の組み合わせを選択
-      let bestSPt = sPoints[0];
-      let bestTPt = tPoints[0];
-      let minDistance = Infinity;
-
-      for (const sPt of sPoints) {
-        for (const tPt of tPoints) {
-          const dist = Math.hypot(sPt.x - tPt.x, sPt.y - tPt.y);
-          if (dist < minDistance) {
-            minDistance = dist;
-            bestSPt = sPt;
-            bestTPt = tPt;
-          }
-        }
-      }
-
-      // ベジェ曲線描画
       this.ctx.beginPath();
-      this.ctx.moveTo(bestSPt.x, bestSPt.y);
-      
-      // コントロールポイントの計算（法線方向に60px延長）
-      let cp1x = bestSPt.x;
-      let cp1y = bestSPt.y;
-      if (bestSPt.direction === 'left') cp1x -= 60;
-      else if (bestSPt.direction === 'right') cp1x += 60;
-      else if (bestSPt.direction === 'top') cp1y -= 60;
-      else if (bestSPt.direction === 'bottom') cp1y += 60;
+      this.ctx.moveTo(pts.sx, pts.sy);
+      this.ctx.bezierCurveTo(pts.cp1x, pts.cp1y, pts.cp2x, pts.cp2y, pts.tx, pts.ty);
 
-      let cp2x = bestTPt.x;
-      let cp2y = bestTPt.y;
-      if (bestTPt.direction === 'left') cp2x -= 60;
-      else if (bestTPt.direction === 'right') cp2x += 60;
-      else if (bestTPt.direction === 'top') cp2y -= 60;
-      else if (bestTPt.direction === 'bottom') cp2y += 60;
-
-      this.ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, bestTPt.x, bestTPt.y);
-      
       // グラデーションエッジ
-      const grad = this.ctx.createLinearGradient(bestSPt.x, bestSPt.y, bestTPt.x, bestTPt.y);
+      const grad = this.ctx.createLinearGradient(pts.sx, pts.sy, pts.tx, pts.ty);
       const isParentRoot = !this.edgeTargets.has(sourceNode.id);
-      
+
       if (isParentRoot) {
         grad.addColorStop(0, '#6366f1'); // インディゴ
         grad.addColorStop(1, '#a855f7'); // パープル
@@ -479,11 +517,69 @@ export class MindMapCanvas {
         grad.addColorStop(0, 'rgba(168, 85, 247, 0.6)');
         grad.addColorStop(1, 'rgba(236, 72, 153, 0.6)');
       }
-      
+
       this.ctx.strokeStyle = grad;
       this.ctx.stroke();
     }
-    
+
+    this.ctx.restore();
+  }
+
+  // エッジ追加ボタンの描画
+  private drawEdgeInsertButton() {
+    if (!this.hoveredEdgeId || this.currentPlaybackTime) return;
+
+    const edge = this.edges.find((e) => e.id === this.hoveredEdgeId);
+    if (!edge) return;
+
+    const pts = this.getEdgePoints(edge);
+    if (!pts) return;
+
+    const x = pts.midX;
+    const y = pts.midY;
+    const isHovered = this.isHoveringEdgeBtn;
+
+    this.ctx.save();
+
+    // ぼかしシャドウ
+    this.ctx.shadowColor = isHovered ? 'rgba(99, 102, 241, 0.6)' : 'rgba(0, 0, 0, 0.3)';
+    this.ctx.shadowBlur = isHovered ? 12 : 6;
+    this.ctx.shadowOffsetY = 2;
+
+    // ボタンの円
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, this.INSERT_BTN_RADIUS, 0, Math.PI * 2);
+
+    // グラデーションの作成
+    const grad = this.ctx.createLinearGradient(x - this.INSERT_BTN_RADIUS, y - this.INSERT_BTN_RADIUS, x + this.INSERT_BTN_RADIUS, y + this.INSERT_BTN_RADIUS);
+    if (isHovered) {
+      grad.addColorStop(0, '#818cf8'); // 明るいインディゴ
+      grad.addColorStop(1, '#c084fc'); // 明るいパープル
+    } else {
+      grad.addColorStop(0, '#6366f1'); // インディゴ
+      grad.addColorStop(1, '#a855f7'); // パープル
+    }
+    this.ctx.fillStyle = grad;
+    this.ctx.fill();
+
+    // 白ボーダー
+    this.ctx.shadowBlur = 0;
+    this.ctx.shadowOffsetY = 0;
+    this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+    this.ctx.lineWidth = 1.5;
+    this.ctx.stroke();
+
+    // 十字架 (+)
+    const size = 5;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x - size, y);
+    this.ctx.lineTo(x + size, y);
+    this.ctx.moveTo(x, y - size);
+    this.ctx.lineTo(x, y + size);
+    this.ctx.strokeStyle = '#ffffff';
+    this.ctx.lineWidth = 2;
+    this.ctx.stroke();
+
     this.ctx.restore();
   }
 
@@ -921,6 +1017,21 @@ export class MindMapCanvas {
         if (isEditing) {
           (activeEl as HTMLElement).blur();
         }
+
+        // 2. エッジ挿入ボタン上クリック判定
+        if (this.hoveredEdgeId && this.isHoveringEdgeBtn && !this.currentPlaybackTime) {
+          if (this.onInsertNodeOnEdge) {
+            const edge = this.edges.find((e) => e.id === this.hoveredEdgeId);
+            if (edge) {
+              const pts = this.getEdgePoints(edge);
+              if (pts) {
+                this.onInsertNodeOnEdge(this.hoveredEdgeId, { x: pts.midX, y: pts.midY });
+                return;
+              }
+            }
+          }
+        }
+
         // 空白地クリックはパン開始
         this.isPanning = true;
         this.panStart = { x: mouseX - this.offsetX, y: mouseY - this.offsetY };
@@ -974,15 +1085,49 @@ export class MindMapCanvas {
         this.isHoveringPlusBtn = false;
       }
       
+      this.hoveredEdgeId = null;
+      this.isHoveringEdgeBtn = false;
+      
       this.canvas.style.cursor = this.isHoveringPlusBtn ? 'pointer' : 'grab';
       this.requestRender();
     } else {
       if (this.hoveredNodeId !== null) {
         this.hoveredNodeId = null;
         this.isHoveringPlusBtn = false;
-        this.canvas.style.cursor = 'grab';
-        this.requestRender();
       }
+
+      // エッジのホバー判定
+      if (!this.currentPlaybackTime) {
+        let bestEdgeId: string | null = null;
+        let bestDist = Infinity;
+
+        for (const edge of this.filteredEdges) {
+          const pts = this.getEdgePoints(edge);
+          if (!pts) continue;
+
+          const dist = Math.hypot(worldPos.x - pts.midX, worldPos.y - pts.midY);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestEdgeId = edge.id;
+          }
+        }
+
+        if (bestDist <= 24) {
+          this.hoveredEdgeId = bestEdgeId;
+          this.isHoveringEdgeBtn = bestDist <= this.INSERT_BTN_RADIUS;
+          this.canvas.style.cursor = this.isHoveringEdgeBtn ? 'pointer' : 'grab';
+        } else {
+          this.hoveredEdgeId = null;
+          this.isHoveringEdgeBtn = false;
+          this.canvas.style.cursor = 'grab';
+        }
+      } else {
+        this.hoveredEdgeId = null;
+        this.isHoveringEdgeBtn = false;
+        this.canvas.style.cursor = 'grab';
+      }
+      
+      this.requestRender();
     }
   }
 
@@ -997,7 +1142,7 @@ export class MindMapCanvas {
     }
 
     this.isPanning = false;
-    this.canvas.style.cursor = this.hoveredNodeId ? (this.isHoveringPlusBtn ? 'pointer' : 'grab') : 'grab';
+    this.canvas.style.cursor = this.hoveredNodeId ? (this.isHoveringPlusBtn ? 'pointer' : 'grab') : (this.hoveredEdgeId && this.isHoveringEdgeBtn ? 'pointer' : 'grab');
   }
 
   // ホイールズーム
@@ -1088,6 +1233,32 @@ export class MindMapCanvas {
       const touchY = e.touches[0].clientY - rect.top;
       
       const worldPos = this.screenToWorld(touchX, touchY);
+
+      // 1. エッジ挿入ボタン（またはエッジ中間点）タップ判定
+      if (!this.currentPlaybackTime) {
+        let bestEdge: Edge | null = null;
+        let bestDist = Infinity;
+        for (const edge of this.filteredEdges) {
+          const pts = this.getEdgePoints(edge);
+          if (!pts) continue;
+          const dist = Math.hypot(worldPos.x - pts.midX, worldPos.y - pts.midY);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestEdge = edge;
+          }
+        }
+        if (bestDist <= 20) { // タッチ判定許容値
+          if (this.onInsertNodeOnEdge && bestEdge) {
+            const pts = this.getEdgePoints(bestEdge);
+            if (pts) {
+              this.onInsertNodeOnEdge(bestEdge.id, { x: pts.midX, y: pts.midY });
+              return;
+            }
+          }
+        }
+      }
+
+      // 2. ノード上クリック判定
       const hitNode = this.findNodeAt(worldPos);
 
       const activeEl = document.activeElement;

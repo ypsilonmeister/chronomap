@@ -1,7 +1,7 @@
 import { createIcons, Plus, Search, CloudLightning, Menu, Undo2, Redo2, Sparkles, HelpCircle, Play, Pause, Edit3, Mic, Image, Trash2, X, Download, Upload, FileText, FileCode } from 'lucide';
 import { MindMapNode } from './types';
 import { MindMapCanvas } from './canvas';
-import { CommandStack, AddNodeCommand, MoveNodeCommand, DeleteNodeCommand } from './history';
+import { CommandStack, AddNodeCommand, MoveNodeCommand, DeleteNodeCommand, InsertNodeOnEdgeCommand } from './history';
 import { ShortcutManager } from './shortcuts';
 import { SidebarManager } from './sidebar';
 import { MediaManager } from './media';
@@ -164,6 +164,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (nodes.some((node) => isRootNode(node.id, edges))) return;
     const createdOut = { node: null as MindMapNode | null };
     await commandStack.execute(new AddNodeCommand({ pageId, text: '新規テーマ', media: { hasImage: false, imageRef: '', hasAudio: false, audioRef: '' }, position: pos }, null, createdOut));
+    nodeEditor.createAndEdit(createdOut.node);
+  };
+  canvasManager.onInsertNodeOnEdge = async (edgeId, pos) => {
+    const pageId = store.getState().currentPageId;
+    if (!pageId || canvasManager.isInPlaybackMode()) return;
+    const edge = canvasManager.getEdges().find((e) => e.id === edgeId);
+    if (!edge) return;
+    const createdOut = { node: null as MindMapNode | null };
+    await commandStack.execute(new InsertNodeOnEdgeCommand(pageId, edge, pos, '新規ノード', createdOut));
     nodeEditor.createAndEdit(createdOut.node);
   };
   canvasManager.onContextMenu = (nodeId, clientX, clientY) => {

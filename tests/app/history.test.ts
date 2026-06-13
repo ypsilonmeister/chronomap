@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { UpdatePageTitleCommand, UpdateNodeColorCommand, AddNodeCommand } from '../../src/history';
+import { UpdatePageTitleCommand, UpdateNodeColorCommand, AddNodeCommand, InsertNodeOnEdgeCommand } from '../../src/history';
 import * as pageRepo from '../../src/data/page-repo';
 import * as nodeRepo from '../../src/data/node-repo';
+import * as edgeRepo from '../../src/data/edge-repo';
 import * as eventlogRepo from '../../src/data/eventlog-repo';
 
 vi.mock('../../src/data/page-repo', () => ({
@@ -19,6 +20,13 @@ vi.mock('../../src/data/node-repo', () => ({
   createNode: vi.fn(),
   putNode: vi.fn(),
   deleteNode: vi.fn(),
+}));
+
+vi.mock('../../src/data/edge-repo', () => ({
+  createEdge: vi.fn(),
+  deleteEdge: vi.fn(),
+  restoreEdges: vi.fn(),
+  putEdge: vi.fn(),
 }));
 
 
@@ -157,4 +165,98 @@ describe('AddNodeCommand', () => {
     expect(restored.updatedAt).not.toBe(ORIGINAL_CREATED_AT);
   });
 });
+
+describe('InsertNodeOnEdgeCommand', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('should execute, soft-delete original edge, create new node and two new edges', async () => {
+    const mockEdge = { id: 'edge1', pageId: 'page1', source: 'nodeA', target: 'nodeB', createdAt: '...', deleted: false };
+    const mockNewNode = { id: 'nodeC', pageId: 'page1', text: '新規ノード', position: { x: 50, y: 50 }, createdAt: '...', updatedAt: '...' };
+    const mockNewEdge1 = { id: 'newEdge1', pageId: 'page1', source: 'nodeA', target: 'nodeC', createdAt: '...' };
+    const mockNewEdge2 = { id: 'newEdge2', pageId: 'page1', source: 'nodeC', target: 'nodeB', createdAt: '...' };
+
+    vi.mocked(nodeRepo.createNode).mockResolvedValue(mockNewNode as any);
+    vi.mocked(edgeRepo.createEdge)
+      .mockResolvedValueOnce(mockNewEdge1 as any)
+      .mockResolvedValueOnce(mockNewEdge2 as any);
+
+    const out = { node: null as any };
+    const command = new InsertNodeOnEdgeCommand(
+      'page1',
+      mockEdge as any,
+      { x: 50, y: 50 },
+      '新規ノード',
+      out
+    );
+
+    await command.execute();
+
+    // Verify original edge deleted
+    expect(edgeRepo.deleteEdge).toHaveBeenCalledWith('edge1');
+    expect(mockEdge.deleted).toBe(true);
+
+    // Verify new node created
+    expect(nodeRepo.createNode).toHaveBeenCalledWith(expect.objectContaining({
+      pageId: 'page1',
+      text: '新規ノード',
+      position: { x: 50, y: 50 }
+    }));
+    expect(out.node).toBe(mockNewNode);
+
+    // Verify new edges created
+    expect(edgeRepo.createEdge).toHaveBeenNthCalledWith(1, {
+      pageId: 'page1',
+      source: 'nodeA',
+      target: 'nodeC'
+    });
+    expect(edgeRepo.createEdge).toHaveBeenNthCalledWith(2, {
+      pageId: 'page1',
+      source: 'nodeC',
+      target: 'nodeB'
+    });
+
+    // Verify history events
+    expect(eventlogRepo.addHistory).toHaveBeenCalledTimes(3);
+  });
+
+  it('should undo and restore original edge and delete new node/edges', async () => {
+    const mockEdge = { id: 'edge1', pageId: 'page1', source: 'nodeA', target: 'nodeB', createdAt: '...', deleted: false };
+    const mockNewNode = { id: 'nodeC', pageId: 'page1', text: '新規ノード', position: { x: 50, y: 50 }, createdAt: '...', updatedAt: '...' };
+    const mockNewEdge1 = { id: 'newEdge1', pageId: 'page1', source: 'nodeA', target: 'nodeC', createdAt: '...' };
+    const mockNewEdge2 = { id: 'newEdge2', pageId: 'page1', source: 'nodeC', target: 'nodeB', createdAt: '...' };
+
+    vi.mocked(nodeRepo.createNode).mockResolvedValue(mockNewNode as any);
+    vi.mocked(edgeRepo.createEdge)
+      .mockResolvedValueOnce(mockNewEdge1 as any)
+      .mockResolvedValueOnce(mockNewEdge2 as any);
+
+    const command = new InsertNodeOnEdgeCommand(
+      'page1',
+      mockEdge as any,
+      { x: 50, y: 50 },
+      '新規ノード'
+    );
+
+    await command.execute();
+
+    vi.clearAllMocks();
+
+    await command.undo();
+
+    // Verify new node and edges deleted
+    expect(edgeRepo.deleteEdge).toHaveBeenCalledWith('newEdge1');
+    expect(edgeRepo.deleteEdge).toHaveBeenCalledWith('newEdge2');
+    expect(nodeRepo.deleteNode).toHaveBeenCalledWith('nodeC');
+
+    // Verify original edge restored
+    expect(edgeRepo.restoreEdges).toHaveBeenCalledWith([mockEdge]);
+    expect(mockEdge.deleted).toBe(false);
+
+    // Verify history events
+    expect(eventlogRepo.addHistory).toHaveBeenCalledTimes(2);
+  });
+});
+
 

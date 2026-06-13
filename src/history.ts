@@ -424,3 +424,141 @@ export class UpdateNodeColorCommand implements Command {
   }
 }
 
+// 8. エッジ分割（ノード挟み込み）コマンド
+export class InsertNodeOnEdgeCommand implements Command {
+  private node: MindMapNode | null = null;
+  private newEdge1: Edge | null = null;
+  private newEdge2: Edge | null = null;
+
+  constructor(
+    private pageId: string,
+    private edgeToSplit: Edge,
+    private nodePosition: Position,
+    private nodeText: string,
+    private createdNodeOut?: { node: MindMapNode | null }
+  ) {}
+
+  async execute() {
+    const now = new Date().toISOString();
+
+    // 1. 元のエッジを論理削除
+    await edgeRepo.deleteEdge(this.edgeToSplit.id);
+    this.edgeToSplit.deleted = true;
+    this.edgeToSplit.updatedAt = now;
+
+    if (this.node && this.newEdge1 && this.newEdge2) {
+      // Redo: 既存のオブジェクトを復元
+      this.node.deleted = false;
+      this.node.updatedAt = now;
+      await nodeRepo.putNode(this.node);
+
+      this.newEdge1.deleted = false;
+      this.newEdge1.updatedAt = now;
+      await edgeRepo.putEdge(this.newEdge1);
+
+      this.newEdge2.deleted = false;
+      this.newEdge2.updatedAt = now;
+      await edgeRepo.putEdge(this.newEdge2);
+    } else {
+      // 初回実行: 新規にノードとエッジを作成
+      this.node = await nodeRepo.createNode({
+        pageId: this.pageId,
+        text: this.nodeText,
+        media: { hasImage: false, imageRef: '', hasAudio: false, audioRef: '' },
+        position: this.nodePosition,
+      });
+
+      if (this.createdNodeOut) {
+        this.createdNodeOut.node = this.node;
+      }
+
+      this.newEdge1 = await edgeRepo.createEdge({
+        pageId: this.pageId,
+        source: this.edgeToSplit.source,
+        target: this.node.id,
+      });
+
+      this.newEdge2 = await edgeRepo.createEdge({
+        pageId: this.pageId,
+        source: this.node.id,
+        target: this.edgeToSplit.target,
+      });
+
+      // 操作履歴（イベントログ）の追加
+      await eventlogRepo.addHistory({
+        pageId: this.pageId,
+        timestamp: now,
+        action: 'delete_edge',
+        payload: {
+          edgeId: this.edgeToSplit.id,
+        },
+      });
+
+      await eventlogRepo.addHistory({
+        pageId: this.pageId,
+        timestamp: this.node.createdAt,
+        action: 'create_node',
+        payload: {
+          node: this.node,
+          parentNodeId: this.edgeToSplit.source,
+        },
+      });
+
+      await eventlogRepo.addHistory({
+        pageId: this.pageId,
+        timestamp: now,
+        action: 'create_edge',
+        payload: {
+          edge: this.newEdge2,
+        },
+      });
+    }
+  }
+
+  async undo() {
+    const now = new Date().toISOString();
+
+    // 1. 作成したノードとエッジを論理削除
+    if (this.newEdge1) {
+      await edgeRepo.deleteEdge(this.newEdge1.id);
+      this.newEdge1.deleted = true;
+      this.newEdge1.updatedAt = now;
+    }
+    if (this.newEdge2) {
+      await edgeRepo.deleteEdge(this.newEdge2.id);
+      this.newEdge2.deleted = true;
+      this.newEdge2.updatedAt = now;
+    }
+    if (this.node) {
+      await nodeRepo.deleteNode(this.node.id);
+      this.node.deleted = true;
+      this.node.updatedAt = now;
+    }
+
+    // 2. 元のエッジを復元
+    await edgeRepo.restoreEdges([this.edgeToSplit]);
+    this.edgeToSplit.deleted = false;
+    this.edgeToSplit.updatedAt = now;
+
+    // 操作履歴ログ（元に戻す操作の記録）
+    await eventlogRepo.addHistory({
+      pageId: this.pageId,
+      timestamp: now,
+      action: 'delete_node',
+      payload: {
+        nodeId: this.node!.id,
+      },
+    });
+
+    await eventlogRepo.addHistory({
+      pageId: this.pageId,
+      timestamp: now,
+      action: 'create_edge',
+      payload: {
+        edge: this.edgeToSplit,
+      },
+    });
+  }
+}
+
+
