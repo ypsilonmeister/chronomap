@@ -3,6 +3,8 @@ import * as pageRepo from '../data/page-repo';
 import * as nodeRepo from '../data/node-repo';
 import * as edgeRepo from '../data/edge-repo';
 import { MediaManager } from '../media';
+import { getDB } from '../data/database';
+import { createWelcomeDemoPage } from '../data/demo-data';
 
 export type Listener<T> = (state: T) => void;
 
@@ -58,26 +60,18 @@ export class AppStore {
     if (this.state.pages.length > 0) {
       this.state.currentPageId = this.state.pages[0].pageId;
     } else {
-      // 初期ウェルカムページと中心ノードの作成
-      const newPage = await pageRepo.createPage('ようこそノート');
-      await nodeRepo.createNode({
-        pageId: newPage.pageId,
-        text: '中心テーマ',
-        media: {
-          hasImage: false,
-          imageRef: '',
-          hasAudio: false,
-          audioRef: ''
-        },
-        position: { x: 0, y: 0 }
-      });
+      // リッチな初期ウェルカムデモページの作成
+      const db = await getDB();
+      const demoPageId = await createWelcomeDemoPage(db);
       this.state.pages = await pageRepo.getAllPages();
       this.state.pageSummaries = await pageRepo.getPageSummaries();
-      this.state.currentPageId = newPage.pageId;
+      this.state.currentPageId = demoPageId;
     }
     this.state.selectedNodeId = null;
     this.state.playbackTime = null;
-    await this.reloadPageData(this.state.currentPageId);
+    if (this.state.currentPageId) {
+      await this.reloadPageData(this.state.currentPageId);
+    }
   }
 
   // ページデータの再読み込みと画像 Blob URL 解決
