@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { UpdatePageTitleCommand, UpdateNodeColorCommand } from '../../src/history';
+import { UpdatePageTitleCommand, UpdateNodeColorCommand, AddNodeCommand } from '../../src/history';
 import * as pageRepo from '../../src/data/page-repo';
 import * as nodeRepo from '../../src/data/node-repo';
 import * as eventlogRepo from '../../src/data/eventlog-repo';
@@ -16,6 +16,9 @@ vi.mock('../../src/data/eventlog-repo', () => ({
 vi.mock('../../src/data/node-repo', () => ({
   getNode: vi.fn(),
   updateNode: vi.fn(),
+  createNode: vi.fn(),
+  putNode: vi.fn(),
+  deleteNode: vi.fn(),
 }));
 
 
@@ -112,6 +115,46 @@ describe('UpdateNodeColorCommand', () => {
       action: 'update_node',
       payload: { nodeId: 'node1', color: 'blue' },
     }));
+  });
+});
+
+describe('AddNodeCommand', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('redo restores the node while preserving its original createdAt (timeline integrity)', async () => {
+    const ORIGINAL_CREATED_AT = '2020-01-01T00:00:00.000Z';
+    const media = { hasImage: false, imageRef: '', hasAudio: false, audioRef: '' };
+    const createdNode = {
+      id: 'n1',
+      pageId: 'page1',
+      text: '新規ノード',
+      media,
+      position: { x: 0, y: 0 },
+      createdAt: ORIGINAL_CREATED_AT,
+      updatedAt: ORIGINAL_CREATED_AT,
+    };
+    vi.mocked(nodeRepo.createNode).mockResolvedValue(createdNode as any);
+
+    const out = { node: null as any };
+    const command = new AddNodeCommand(
+      { pageId: 'page1', text: '新規ノード', media, position: { x: 0, y: 0 } } as any,
+      null,
+      out
+    );
+
+    await command.execute(); // 初回作成 (createNode 経由)
+    await command.undo();     // 論理削除
+    await command.execute();  // Redo (putNode 経由で復元)
+
+    // Redo は putNode で復元する。createdAt は元の生成時刻のまま保持され、deleted は解除される。
+    expect(nodeRepo.putNode).toHaveBeenCalledTimes(1);
+    const restored = vi.mocked(nodeRepo.putNode).mock.calls[0][0];
+    expect(restored.createdAt).toBe(ORIGINAL_CREATED_AT);
+    expect(restored.deleted).toBe(false);
+    // updatedAt は復元時刻に更新される（生成時刻とは別物）
+    expect(restored.updatedAt).not.toBe(ORIGINAL_CREATED_AT);
   });
 });
 

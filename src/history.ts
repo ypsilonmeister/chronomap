@@ -27,15 +27,7 @@ export class CommandStack {
     this.undoStack.push(command);
     this.redoStack = []; // 新しい操作が行われたらRedoスタックはクリア
     this.onStackChanged();
-
-    const pageId = store.getState().currentPageId;
-    if (pageId) {
-      if (command instanceof UpdatePageTitleCommand) {
-        await store.reloadPages(pageId);
-      } else {
-        await store.reloadPageData(pageId);
-      }
-    }
+    await this.refreshStore(command);
   }
 
   public async undo() {
@@ -44,15 +36,7 @@ export class CommandStack {
       await command.undo();
       this.redoStack.push(command);
       this.onStackChanged();
-
-      const pageId = store.getState().currentPageId;
-      if (pageId) {
-        if (command instanceof UpdatePageTitleCommand) {
-          await store.reloadPages(pageId);
-        } else {
-          await store.reloadPageData(pageId);
-        }
-      }
+      await this.refreshStore(command);
     }
   }
 
@@ -62,15 +46,19 @@ export class CommandStack {
       await command.execute();
       this.undoStack.push(command);
       this.onStackChanged();
+      await this.refreshStore(command);
+    }
+  }
 
-      const pageId = store.getState().currentPageId;
-      if (pageId) {
-        if (command instanceof UpdatePageTitleCommand) {
-          await store.reloadPages(pageId);
-        } else {
-          await store.reloadPageData(pageId);
-        }
-      }
+  // コマンド実行後に store を再読込する。ページ一覧に影響するコマンド
+  // (タイトル変更) はページ一覧ごと、それ以外は現在ページのデータのみを更新する。
+  private async refreshStore(command: Command) {
+    const pageId = store.getState().currentPageId;
+    if (!pageId) return;
+    if (command instanceof UpdatePageTitleCommand) {
+      await store.reloadPages(pageId);
+    } else {
+      await store.reloadPageData(pageId);
     }
   }
 
@@ -106,14 +94,15 @@ export class AddNodeCommand implements Command {
 
   async execute() {
     if (this.node) {
+      // Redo: 既存ノード・エッジの復元。
+      // createdAt はタイムライン上のノード出現時刻を決定するため、Redo では上書きせず
+      // 元の生成時刻を保持する（上書きすると再生時に出現位置がずれる）。
       const now = new Date().toISOString();
-      this.node.createdAt = now;
       this.node.updatedAt = now;
       this.node.deleted = false;
       await nodeRepo.putNode(this.node);
-      
+
       if (this.edge) {
-        this.edge.createdAt = now;
         this.edge.updatedAt = now;
         this.edge.deleted = false;
         await edgeRepo.putEdge(this.edge);

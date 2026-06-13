@@ -74,14 +74,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!newPos) return;
         const createdOut = { node: null as MindMapNode | null };
         await commandStack.execute(new AddNodeCommand({ pageId, text: '新規ノード', media: { hasImage: false, imageRef: '', hasAudio: false, audioRef: '' }, position: newPos }, parentId, createdOut));
-        if (createdOut.node) {
-          setTimeout(() => {
-            if (createdOut.node) {
-              if (window.innerWidth > 768) nodeEditor.startInlineEdit(createdOut.node.id);
-              else canvasManager.setSelectedNodeId(createdOut.node.id);
-            }
-          }, 100);
-        }
+        nodeEditor.createAndEdit(createdOut.node);
       },
       onAddChild: (nodeId) => { canvasManager.onAddChildNode?.(nodeId); },
       onDeleteNode: async (nodeId) => {
@@ -161,14 +154,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!newPos) return;
     const createdOut = { node: null as MindMapNode | null };
     await commandStack.execute(new AddNodeCommand({ pageId, text: '新規ノード', media: { hasImage: false, imageRef: '', hasAudio: false, audioRef: '' }, position: newPos }, parentNodeId, createdOut));
-    if (createdOut.node) {
-      setTimeout(() => {
-        if (createdOut.node) {
-          if (window.innerWidth > 768) nodeEditor.startInlineEdit(createdOut.node.id);
-          else canvasManager.setSelectedNodeId(createdOut.node.id);
-        }
-      }, 100);
-    }
+    nodeEditor.createAndEdit(createdOut.node);
   };
   canvasManager.onAddRootNode = async (pos) => {
     const pageId = store.getState().currentPageId;
@@ -178,14 +164,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (nodes.some((node) => isRootNode(node.id, edges))) return;
     const createdOut = { node: null as MindMapNode | null };
     await commandStack.execute(new AddNodeCommand({ pageId, text: '新規テーマ', media: { hasImage: false, imageRef: '', hasAudio: false, audioRef: '' }, position: pos }, null, createdOut));
-    if (createdOut.node) {
-      setTimeout(() => {
-        if (createdOut.node) {
-          if (window.innerWidth > 768) nodeEditor.startInlineEdit(createdOut.node.id);
-          else canvasManager.setSelectedNodeId(createdOut.node.id);
-        }
-      }, 100);
-    }
+    nodeEditor.createAndEdit(createdOut.node);
   };
   canvasManager.onContextMenu = (nodeId, clientX, clientY) => {
     if (canvasManager.isInPlaybackMode()) return;

@@ -2,6 +2,7 @@ import { MindMapCanvas } from '../canvas';
 import { CommandStack, UpdateNodeTextCommand } from '../history';
 import { ShortcutManager } from '../shortcuts';
 import { AudioSpeechRecognizer } from '../audio';
+import { MindMapNode } from '../types';
 
 export class NodeEditorController {
   private activeEditNodeId: string | null = null;
@@ -17,6 +18,18 @@ export class NodeEditorController {
 
   public getActiveEditNodeId(): string | null {
     return this.activeEditNodeId;
+  }
+
+  // ノード生成直後に、デスクトップではインライン編集を開始し、モバイルでは選択状態にする
+  public createAndEdit(node: MindMapNode | null) {
+    if (!node) return;
+    setTimeout(() => {
+      if (window.innerWidth > 768) {
+        this.startInlineEdit(node.id);
+      } else {
+        this.canvasManager.setSelectedNodeId(node.id);
+      }
+    }, 100);
   }
 
   // インラインテキスト編集の開始
