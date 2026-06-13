@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { UpdatePageTitleCommand, UpdateNodeColorCommand, AddNodeCommand, InsertNodeOnEdgeCommand } from '../../src/history';
+import { UpdatePageTitleCommand, UpdateNodeColorCommand, AddNodeCommand, InsertNodeOnEdgeCommand, DeleteNodeCommand } from '../../src/history';
 import * as pageRepo from '../../src/data/page-repo';
 import * as nodeRepo from '../../src/data/node-repo';
 import * as edgeRepo from '../../src/data/edge-repo';
@@ -20,6 +20,8 @@ vi.mock('../../src/data/node-repo', () => ({
   createNode: vi.fn(),
   putNode: vi.fn(),
   deleteNode: vi.fn(),
+  cascadeSoftDelete: vi.fn(),
+  restoreNodes: vi.fn(),
 }));
 
 vi.mock('../../src/data/edge-repo', () => ({
@@ -27,6 +29,7 @@ vi.mock('../../src/data/edge-repo', () => ({
   deleteEdge: vi.fn(),
   restoreEdges: vi.fn(),
   putEdge: vi.fn(),
+  getEdgesByPage: vi.fn(),
 }));
 
 
@@ -256,6 +259,88 @@ describe('InsertNodeOnEdgeCommand', () => {
 
     // Verify history events
     expect(eventlogRepo.addHistory).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('DeleteNodeCommand', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('should cascade-delete if the node is a root node (no parent)', async () => {
+    const mockNode = { id: 'rootNode', pageId: 'page1', text: 'Root theme', position: { x: 0, y: 0 } };
+    vi.mocked(nodeRepo.getNode).mockResolvedValue(mockNode as any);
+    vi.mocked(edgeRepo.getEdgesByPage).mockResolvedValue([]); // No edges on page
+    vi.mocked(nodeRepo.cascadeSoftDelete).mockResolvedValue({
+      deletedNodes: [mockNode],
+      deletedEdges: [],
+      deletedImages: []
+    } as any);
+
+    const command = new DeleteNodeCommand('rootNode');
+    await command.execute();
+
+    expect(nodeRepo.cascadeSoftDelete).toHaveBeenCalledWith('rootNode');
+    expect(eventlogRepo.addHistory).toHaveBeenCalledWith(expect.objectContaining({
+      pageId: 'page1',
+      action: 'delete_node',
+      payload: expect.objectContaining({
+        nodeId: 'rootNode',
+        cascadeIds: ['rootNode']
+      })
+    }));
+  });
+
+  it('should bypass-delete and reconnect parent to child if target is an intermediate node', async () => {
+    const mockNode = { id: 'nodeB', pageId: 'page1', text: 'Intermediate', position: { x: 100, y: 100 }, deleted: false };
+    const parentEdge = { id: 'edgeAB', pageId: 'page1', source: 'nodeA', target: 'nodeB', deleted: false };
+    const childEdge = { id: 'edgeBC', pageId: 'page1', source: 'nodeB', target: 'nodeC', deleted: false };
+    const newEdge = { id: 'edgeAC', pageId: 'page1', source: 'nodeA', target: 'nodeC', deleted: false };
+
+    vi.mocked(nodeRepo.getNode).mockResolvedValue(mockNode as any);
+    vi.mocked(edgeRepo.getEdgesByPage).mockResolvedValue([parentEdge, childEdge] as any);
+    vi.mocked(edgeRepo.createEdge).mockResolvedValue(newEdge as any);
+
+    const command = new DeleteNodeCommand('nodeB');
+    await command.execute();
+
+    // Check target node soft deleted
+    expect(nodeRepo.putNode).toHaveBeenCalledWith(expect.objectContaining({ id: 'nodeB', deleted: true }));
+
+    // Check connected edges soft deleted
+    expect(edgeRepo.putEdge).toHaveBeenCalledWith(expect.objectContaining({ id: 'edgeAB', deleted: true }));
+    expect(edgeRepo.putEdge).toHaveBeenCalledWith(expect.objectContaining({ id: 'edgeBC', deleted: true }));
+
+    // Check new bypass edge created from parent to child
+    expect(edgeRepo.createEdge).toHaveBeenCalledWith({
+      pageId: 'page1',
+      source: 'nodeA',
+      target: 'nodeC'
+    });
+
+    // Check eventlog logs delete_node and create_edge
+    expect(eventlogRepo.addHistory).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'delete_node',
+      payload: { nodeId: 'nodeB', cascadeIds: ['nodeB'] }
+    }));
+    expect(eventlogRepo.addHistory).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'create_edge',
+      payload: { edge: newEdge }
+    }));
+
+    // Test Undo
+    vi.clearAllMocks();
+    await command.undo();
+
+    // Verify bypass edge deleted
+    expect(edgeRepo.deleteEdge).toHaveBeenCalledWith('edgeAC');
+
+    // Verify target node & original edges restored
+    expect(nodeRepo.restoreNodes).toHaveBeenCalledWith([expect.objectContaining({ id: 'nodeB' })]);
+    expect(edgeRepo.restoreEdges).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({ id: 'edgeAB' }),
+      expect.objectContaining({ id: 'edgeBC' })
+    ]));
   });
 });
 

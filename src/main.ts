@@ -80,7 +80,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       onDeleteNode: async (nodeId) => {
         const pageId = store.getState().currentPageId;
         if (canvasManager.isInPlaybackMode() || !pageId) return;
-        if (confirm('このノードとすべての子ノードを削除しますか？')) await commandStack.execute(new DeleteNodeCommand(nodeId));
+        const edges = canvasManager.getEdges();
+        const isRoot = isRootNode(nodeId, edges);
+        const msg = isRoot 
+          ? 'このテーマとすべての子ノードを削除しますか？' 
+          : 'このノードを削除しますか？';
+        if (confirm(msg)) await commandStack.execute(new DeleteNodeCommand(nodeId));
       },
       onEditText: (nodeId) => nodeEditor.startInlineEdit(nodeId),
       onAlign: () => pageController.triggerAutoLayout(canvasManager),
@@ -188,7 +193,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         }, (err) => alert(`写真の添付に失敗しました: ${err.message || err}`));
       },
       onDeleteNode: async (id) => {
-        if (confirm('このノードとすべての子ノードを削除しますか？')) await commandStack.execute(new DeleteNodeCommand(id));
+        const edges = canvasManager.getEdges();
+        const isRoot = isRootNode(id, edges);
+        const msg = isRoot 
+          ? 'このテーマとすべての子ノードを削除しますか？' 
+          : 'このノードを削除しますか？';
+        if (confirm(msg)) await commandStack.execute(new DeleteNodeCommand(id));
       }
     });
   };

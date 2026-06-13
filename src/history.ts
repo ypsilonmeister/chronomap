@@ -249,12 +249,14 @@ export class UpdateNodeTextCommand implements Command {
   }
 }
 
-// 4. ノード削除コマンド（配下子ノードも一括）
+// 4. ノード削除コマンド（配下子ノードも一括、ただし中間ノードの場合は親と子を直結）
 export class DeleteNodeCommand implements Command {
   private deletedNodes: MindMapNode[] = [];
   private deletedEdges: Edge[] = [];
   private deletedImages: Array<{ id: string; blob: Blob }> = [];
+  private createdEdges: Edge[] = [];
   private pageId = '';
+  private isBypass = false;
 
   constructor(
     private targetNodeId: string
@@ -266,36 +268,136 @@ export class DeleteNodeCommand implements Command {
     
     this.pageId = node.pageId;
 
-    const { deletedNodes, deletedEdges, deletedImages } = await nodeRepo.cascadeSoftDelete(this.targetNodeId);
-    this.deletedNodes = deletedNodes;
-    this.deletedEdges = deletedEdges;
-    this.deletedImages = deletedImages;
+    const allEdges = await edgeRepo.getEdgesByPage(this.pageId);
+    const parentEdge = allEdges.find((e) => e.target === this.targetNodeId && !e.deleted);
+    const childEdges = allEdges.filter((e) => e.source === this.targetNodeId && !e.deleted);
 
-    await eventlogRepo.addHistory({
-      pageId: this.pageId,
-      timestamp: new Date().toISOString(),
-      action: 'delete_node',
-      payload: {
-        nodeId: this.targetNodeId,
-        cascadeIds: this.deletedNodes.map((n) => n.id)
+    if (parentEdge) {
+      // 中間・リーフノードの場合：親と子を直結するバイパス処理
+      this.isBypass = true;
+      const now = new Date().toISOString();
+
+      // 1. ノードの論理削除
+      node.deleted = true;
+      node.updatedAt = now;
+      await nodeRepo.putNode(node);
+      this.deletedNodes = [node];
+
+      // 2. 親からターゲットへのエッジの論理削除
+      parentEdge.deleted = true;
+      parentEdge.updatedAt = now;
+      await edgeRepo.putEdge(parentEdge);
+      this.deletedEdges = [parentEdge];
+
+      // 3. ターゲットから子への全エッジの論理削除
+      for (const childEdge of childEdges) {
+        childEdge.deleted = true;
+        childEdge.updatedAt = now;
+        await edgeRepo.putEdge(childEdge);
+        this.deletedEdges.push(childEdge);
       }
-    });
+
+      // 4. バイパスエッジ（親から各子ノード）の作成 / 復元
+      if (this.createdEdges.length > 0) {
+        // Redo時: 既存エッジを復元
+        for (const newEdge of this.createdEdges) {
+          newEdge.deleted = false;
+          newEdge.updatedAt = now;
+          await edgeRepo.putEdge(newEdge);
+        }
+      } else {
+        // 初回実行時: 新規エッジを作成
+        for (const childEdge of childEdges) {
+          const newEdge = await edgeRepo.createEdge({
+            pageId: this.pageId,
+            source: parentEdge.source,
+            target: childEdge.target
+          });
+          this.createdEdges.push(newEdge);
+        }
+      }
+
+      // 5. 操作履歴（イベントログ）の記録
+      await eventlogRepo.addHistory({
+        pageId: this.pageId,
+        timestamp: now,
+        action: 'delete_node',
+        payload: {
+          nodeId: this.targetNodeId,
+          cascadeIds: [this.targetNodeId]
+        }
+      });
+      for (const newEdge of this.createdEdges) {
+        await eventlogRepo.addHistory({
+          pageId: this.pageId,
+          timestamp: now,
+          action: 'create_edge',
+          payload: {
+            edge: newEdge
+          }
+        });
+      }
+    } else {
+      // ルートノードの場合：カスケード論理削除（従来通り）
+      this.isBypass = false;
+      const { deletedNodes, deletedEdges, deletedImages } = await nodeRepo.cascadeSoftDelete(this.targetNodeId);
+      this.deletedNodes = deletedNodes;
+      this.deletedEdges = deletedEdges;
+      this.deletedImages = deletedImages;
+
+      await eventlogRepo.addHistory({
+        pageId: this.pageId,
+        timestamp: new Date().toISOString(),
+        action: 'delete_node',
+        payload: {
+          nodeId: this.targetNodeId,
+          cascadeIds: this.deletedNodes.map((n) => n.id)
+        }
+      });
+    }
   }
 
   async undo() {
-    await imageRepo.restoreImages(this.deletedImages);
-    await nodeRepo.restoreNodes(this.deletedNodes);
-    await edgeRepo.restoreEdges(this.deletedEdges);
+    const now = new Date().toISOString();
 
-    await eventlogRepo.addHistory({
-      pageId: this.pageId,
-      timestamp: new Date().toISOString(),
-      action: 'create_node',
-      payload: {
-        nodes: this.deletedNodes,
-        edges: this.deletedEdges
+    if (this.isBypass) {
+      // 1. 作成したバイパスエッジを論理削除
+      for (const newEdge of this.createdEdges) {
+        await edgeRepo.deleteEdge(newEdge.id);
+        newEdge.deleted = true;
+        newEdge.updatedAt = now;
       }
-    });
+
+      // 2. 元のノードとエッジを復元
+      await nodeRepo.restoreNodes(this.deletedNodes);
+      await edgeRepo.restoreEdges(this.deletedEdges);
+
+      // 3. 操作履歴（イベントログ）の記録
+      await eventlogRepo.addHistory({
+        pageId: this.pageId,
+        timestamp: now,
+        action: 'create_node',
+        payload: {
+          nodes: this.deletedNodes,
+          edges: this.deletedEdges
+        }
+      });
+    } else {
+      // カスケード削除からの復元
+      await imageRepo.restoreImages(this.deletedImages);
+      await nodeRepo.restoreNodes(this.deletedNodes);
+      await edgeRepo.restoreEdges(this.deletedEdges);
+
+      await eventlogRepo.addHistory({
+        pageId: this.pageId,
+        timestamp: now,
+        action: 'create_node',
+        payload: {
+          nodes: this.deletedNodes,
+          edges: this.deletedEdges
+        }
+      });
+    }
   }
 }
 
